@@ -3,7 +3,7 @@
 In this work, we propose an efficient multi-level convolution architecture for 3D visual grounding. TSP3D achieves superior performance compared to previous approaches in both inference speed and accuracy.
 
 ## News
-- [2025/2/14]: Code release.
+- [2025/2/16]: Code release.
 
 ## Method
 Method Pipeline:
