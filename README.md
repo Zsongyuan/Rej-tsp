@@ -178,7 +178,7 @@ The final required files are as follows:
 
 ## Acknowledgements
 
-We are quite grateful for [BUTD-DETR](https://github.com/nickgkan/butd_detr), [EDA](https://github.com/yanmin-wu/EDA), [ScanRefer](https://github.com/daveredrum/ScanRefer), [DSPDet3D](https://github.com/xuxw98/DSPDet3D), and [TR3D](https://github.com/SamsungLabs/tr3d).
+We are quite grateful for [DSPDet3D](https://github.com/xuxw98/DSPDet3D), [BUTD-DETR](https://github.com/nickgkan/butd_detr), [EDA](https://github.com/yanmin-wu/EDA), [ScanRefer](https://github.com/daveredrum/ScanRefer) and [TR3D](https://github.com/SamsungLabs/tr3d).
 
 
 ## Citation
