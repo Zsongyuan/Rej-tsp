@@ -1,9 +1,16 @@
 # TSP3D: Text-guided Sparse Voxel Pruning for Efficient 3D Visual Grounding
 
-In this work, we propose an efficient multi-level convolution architecture for 3D visual grounding. TSP3D achieves superior performance compared to previous approaches in both inference speed and accuracy.
+This repo contains the official PyTorch implementation for paper [Text-guided Sparse Voxel Pruning for Efficient 3D Visual Grounding](https://arxiv.org/abs/2502.10392).
+
+> Text-guided Sparse Voxel Pruning for Efficient 3D Visual Grounding  
+> [Wenxuan Guo](https://github.com/GWxuan)*, [Xiuwei Xu](https://xuxw98.github.io/)\*, [Ziwei Wang](https://ziweiwangthu.github.io/), [Jianjiang Feng](https://ivg.au.tsinghua.edu.cn/~jfeng/index.html)$^\dagger$, [Jie Zhou](https://scholar.google.com/citations?user=6a79aPwAAAAJ&hl=en&authuser=1), [Jiwen Lu](http://ivg.au.tsinghua.edu.cn/Jiwen_Lu/)
+
+\* Equal contribution $\dagger$ Corresponding author
+
+In this work, we propose an efficient multi-level convolution architecture for <b>3D visual grounding</b>. TSP3D achieves superior performance compared to previous approaches in both <b>inference speed and accuracy</b>.
 
 ## News
-- [2025/2/16]: Code release.
+- [2025/2/16]: Code and arxiv paper released.
 
 ## Method
 Method Pipeline:
@@ -172,3 +179,14 @@ The final required files are as follows:
 ## Acknowledgements
 
 We are quite grateful for [BUTD-DETR](https://github.com/nickgkan/butd_detr), [EDA](https://github.com/yanmin-wu/EDA), [ScanRefer](https://github.com/daveredrum/ScanRefer), [DSPDet3D](https://github.com/xuxw98/DSPDet3D), and [TR3D](https://github.com/SamsungLabs/tr3d).
+
+
+## Citation
+```
+@article{guo2025tsp3d, 
+      title={Text-guided Sparse Voxel Pruning for Efficient 3D Visual Grounding}, 
+      author={Wenxuan Guo and Xiuwei Xu and Ziwei Wang and Jianjiang Feng and Jie Zhou and Jiwen Lu},
+      journal={arXiv preprint arXiv:2502.10392},
+      year={2025}
+}
+```
