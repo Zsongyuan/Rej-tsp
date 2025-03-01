@@ -146,12 +146,12 @@ The final required files are as follows:
 + We provide the checkpoints for quick reproduction of the results reported in the paper.
   Benchmark | Pipeline | Acc@0.25 | Acc@0.5 | Inference Speed (FPS) | Downloads |
   :----: | :----: | :----: | :----: | :----: | :----: |
-  ScanRefer | Single-stage | 56.45 | 46.71 | 12.43 | [model](https://cloud.tsinghua.edu.cn/f/f277c88df4ba4ffa9398/?dl=1)
+  ScanRefer | Single-stage | 56.45 | 46.71 | 12.43 | [model](https://huggingface.co/gwx22/TSP3D/blob/main/ckpt_scanrefer.pth)
 
   Benchmark | Pipeline | Acc@0.25 | Acc@0.5 | Downloads |
   :----: | :----: | :----: | :----: | :----: |
-  Nr3d | Single-stage | 48.7 | 37.0 | [model](https://cloud.tsinghua.edu.cn/f/bc5b3b89dbd4464ba86b/?dl=1)
-  Sr3d | Single-stage | 57.1 | 44.1 | [model](https://cloud.tsinghua.edu.cn/f/3e2b76bba9304896a802/?dl=1)
+  Nr3d | Single-stage | 48.7 | 37.0 | [model](https://huggingface.co/gwx22/TSP3D/blob/main/ckpt_nr3d.pth)
+  Sr3d | Single-stage | 57.1 | 44.1 | [model](https://huggingface.co/gwx22/TSP3D/blob/main/ckpt_sr3d.pth)
 
 + Comparison of 3DVG methods on ScanRefer dataset:
 <figure>
