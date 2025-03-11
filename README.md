@@ -1,6 +1,6 @@
 # TSP3D: Text-guided Sparse Voxel Pruning for Efficient 3D Visual Grounding
 
-This repo contains the official PyTorch implementation for paper [Text-guided Sparse Voxel Pruning for Efficient 3D Visual Grounding](https://arxiv.org/abs/2502.10392).
+This repo contains the official PyTorch implementation for paper [Text-guided Sparse Voxel Pruning for Efficient 3D Visual Grounding](https://arxiv.org/abs/2502.10392). Look here for [中文解读](https://zhuanlan.zhihu.com/p/29557016028).
 
 > Text-guided Sparse Voxel Pruning for Efficient 3D Visual Grounding  
 > [Wenxuan Guo](https://github.com/GWxuan)*, [Xiuwei Xu](https://xuxw98.github.io/)\*, [Ziwei Wang](https://ziweiwangthu.github.io/), [Jianjiang Feng](https://ivg.au.tsinghua.edu.cn/~jfeng/index.html)$^\dagger$, [Jie Zhou](https://scholar.google.com/citations?user=6a79aPwAAAAJ&hl=en&authuser=1), [Jiwen Lu](http://ivg.au.tsinghua.edu.cn/Jiwen_Lu/)$^\dagger$
