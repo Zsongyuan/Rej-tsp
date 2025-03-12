@@ -10,7 +10,7 @@ This repo contains the official PyTorch implementation for paper [Text-guided Sp
 In this work, we propose an efficient multi-level convolution architecture for <b>3D visual grounding</b>. TSP3D achieves superior performance compared to previous approaches in both <b>inference speed and accuracy</b>.
 
 ## News
-- [2025/2/27]: TSP3D is accepted to CVPR25 with final reviews of all accepts (the highest ratings)!!
+- [2025/2/27]: TSP3D is accepted to CVPR2025 (Rating: 555)!!
 - [2025/2/16]: Code and arxiv paper released.
 
 ## Method
