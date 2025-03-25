@@ -1274,7 +1274,6 @@ def save_data(filename, split, data_path):
     scan_path = data_path + 'scans/'
     with open('data/meta_data/scannetv2_%s.txt' % split) as f:
         scan_ids = [line.rstrip() for line in f]    # train/val scene id list.
-        scan_ids = [scan_ids[k] for k in range(4)]
     print('{} scans found.'.format(len(scan_ids)))
 
     # Load data
