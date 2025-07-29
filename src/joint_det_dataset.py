@@ -160,7 +160,8 @@ class Joint3DDataset(Dataset):
             'sr3d': self.load_sr3d_annos,
             'sr3d+': self.load_sr3dplus_annos,
             'scanrefer': self.load_scanrefer_annos, # scanrefer
-            'scannet': self.load_scannet_annos      # scannet detection augmentation
+            'scannet': self.load_scannet_annos,      # scannet detection augmentation
+            'vigil3d': self.load_vigil3d_annos
         }
         annos = loaders[dset]()
         if self.overfit:
@@ -386,6 +387,104 @@ class Joint3DDataset(Dataset):
                 anno for a, anno in enumerate(annos)
                 if a not in {965, 977}
             ]
+        return annos
+    
+    def load_vigil3d_annos(self):
+        """Load annotations of ViGiL3D."""
+        self.raw2label = self._get_raw2label()
+        _path = self.data_path + 'ViGiL3D/ViGiL3D_filtered'
+        split = self.split
+        if split in ('val', 'test'):
+            split = 'val'
+        
+        # 修复1: 正确加载和解包vigil3d的scans
+        vigil3d_scans_path = f'{self.data_path}/{split}_vigil3d_v3scans.pkl'
+        if os.path.exists(vigil3d_scans_path):
+            vigil3d_scans = unpickle_data(vigil3d_scans_path)
+            self.scans = list(vigil3d_scans)[0]  # 正确解包
+        # 如果vigil3d专用的pkl不存在，使用原有的scans
+        # （self.scans在__init__中已经加载）
+        
+        with open(_path + '_%s.txt' % split) as f:
+            scan_ids = [line.rstrip().strip('\n') for line in f.readlines()]
+        with open(_path + '_%s.json' % split) as f:
+            reader = json.load(f)
+        if self.wo_obj_name != "None":
+            with open(self.wo_obj_name) as f:
+                reader = json.load(f)
+        
+        # STEP 1. load utterance
+        annos = []
+        for anno in reader:
+            if anno['scene_id'] not in scan_ids:
+                continue
+            try:
+                target_id = int(anno['object_id'])
+            except ValueError:
+                print(f"Skipping invalid object_id: {anno['object_id']} in {anno['scene_id']}")
+                continue
+            annos.append({
+                'scan_id': anno['scene_id'],
+                'target_id': target_id,
+                # 'ann_id': int(anno['ann_id']),
+                'distractor_ids': [],
+                'utterance': ' '.join(anno['token']),
+                'target': ' '.join(str(anno['object_name']).split('_')),
+                'anchors': [],      
+                'anchor_ids': [],   
+                'dataset': 'vigil3d',
+                'target_cat': self.raw2label[' '.join(str(anno['object_name']).split('_'))] if ' '.join(str(anno['object_name']).split('_')) in self.raw2label else 17
+            })
+
+        ###########################
+        # STEP 2. text decoupling #
+        ###########################
+        Scene_graph_parse(annos)
+
+        # STEP 3. Add distractor info
+        scene2obj = defaultdict(list)
+        sceneobj2used = defaultdict(list)
+        for anno in annos:
+            # 修复2: 直接使用len()而不是转换为list
+            scan = self.scans[anno['scan_id']]
+            num_objects = len(scan.three_d_objects)
+            
+            nyu_labels = [
+                self.label_mapclass[
+                    scan.get_object_instance_label(ind)
+                ]
+                for ind in range(num_objects)
+            ]
+            labels = [DC18.type2class.get(lbl, 17) for lbl in nyu_labels]
+            anno['distractor_ids'] = [
+                ind
+                for ind in range(num_objects)
+                if labels[ind] == labels[anno['target_id']]
+                and ind != anno['target_id']
+            ][:32]
+            if anno['target_id'] not in sceneobj2used[anno['scan_id']]:
+                sceneobj2used[anno['scan_id']].append(anno['target_id'])
+                scene2obj[anno['scan_id']].append(labels[anno['target_id']])
+
+        # STEP 4. Add unique-multi
+        for anno in annos:
+            if anno['scan_id'] not in list(self.scans.keys()):
+                continue
+
+            scan = self.scans[anno['scan_id']]
+            num_objects = len(scan.three_d_objects)
+            
+            nyu_labels = [
+                self.label_mapclass[
+                    scan.get_object_instance_label(ind)
+                ]
+                for ind in range(num_objects)
+            ]
+            labels = [DC18.type2class.get(lbl, 17) for lbl in nyu_labels]
+            anno['unique'] = (
+                np.array(scene2obj[anno['scan_id']])
+                == labels[anno['target_id']]
+            ).sum() == 1
         return annos
     
     # BRIEF smaple classes for detection prompt
@@ -1266,14 +1365,17 @@ def scannet_loader(iter_obj):
     return Scan(scan_id, scan_path, True)
 
 # BRIEF Save all scans to pickle.
-def save_data(filename, split, data_path):
+def save_data(filename, split, data_path, custom_scan_ids=None):
     """Save all scans to pickle."""
     import multiprocessing as mp
 
     # Read all scan files
     scan_path = data_path + 'scans/'
-    with open('data/meta_data/scannetv2_%s.txt' % split) as f:
-        scan_ids = [line.rstrip() for line in f]    # train/val scene id list.
+    if custom_scan_ids is None:
+        with open('data/meta_data/scannetv2_%s.txt' % split) as f:
+            scan_ids = [line.rstrip() for line in f]    # train/val scene id list.
+    else:
+        scan_ids = custom_scan_ids
     print('{} scans found.'.format(len(scan_ids)))
 
     # Load data
@@ -1327,10 +1429,14 @@ def unpickle_data(file_name, python2_to_3=False):
 #########################
 # BRIEF Text decoupling #
 #########################
+#########################
+# BRIEF Text decoupling #
+#########################
 def Scene_graph_parse(annos):
     # print('Begin text decoupling......')
     for anno in annos:
         caption = ' '.join(anno['utterance'].replace(',', ' , ').split())
+        print(f"Processing caption: {caption} for scan_id: {anno['scan_id']}")
 
         # some error or typo in ScanRefer.
         caption = ' '.join(caption.replace("'m", "am").split())
@@ -1348,8 +1454,12 @@ def Scene_graph_parse(annos):
         caption = ' '.join(caption.replace("4-seat", "4 - seat").split())
         caption = ' '.join(caption.replace("theses", "these").split())
         
+        # 额外的ViGiL3D特殊字符处理
+        caption = ' '.join(caption.replace("%", " percent").split())
+        caption = ' '.join(caption.replace("20%", "20 percent").split())
+        
         # some error or typo in NR3D.
-        if anno['dataset'] == 'nr3d':
+        if anno['dataset'] in ['nr3d', 'vigil3d']:  # 也为vigil3d添加处理
             caption = ' '.join(caption.replace('.', ' .').split())
             caption = ' '.join(caption.replace(';', ' ; ').split())
             caption = ' '.join(caption.replace('-', ' ').split())
@@ -1374,13 +1484,13 @@ def Scene_graph_parse(annos):
             caption = ' '.join(caption.replace("wheel-chair", "wheel - chair").split())
             caption = ' '.join(caption.replace(";s", "is").split())
             caption = ' '.join(caption.replace("tha=e", "the").split())
-            caption = ' '.join(caption.replace("it’s", "it is").split())
-            caption = ' '.join(caption.replace("’s", " is").split())
+            caption = ' '.join(caption.replace("it's", "it is").split())
+            caption = ' '.join(caption.replace("'s", " is").split())
             caption = ' '.join(caption.replace("isnt", "is not").split())
             caption = ' '.join(caption.replace("Don't", "Do not").split())
             caption = ' '.join(caption.replace("arent", "are not").split())
             caption = ' '.join(caption.replace("cant", "can not").split())
-            caption = ' '.join(caption.replace("you’re", "you are").split())
+            caption = ' '.join(caption.replace("you're", "you are").split())
             caption = ' '.join(caption.replace('!', ' !').split())
             caption = ' '.join(caption.replace('id the', ' , the').split())
             caption = ' '.join(caption.replace('youre', 'you are').split())
@@ -1394,8 +1504,20 @@ def Scene_graph_parse(annos):
         
         anno['utterance'] = caption
 
-        # text parsing
-        graph_node, graph_edge = sng_parser.parse(caption)
+        try:  # 添加 try-except 容错
+            graph_node, graph_edge = sng_parser.parse(caption)
+        except (AssertionError, Exception) as e:
+            print(f"Parse failed for caption: {caption} - Error: {e}")
+            # 设置默认值
+            graph_node = [{
+                'node_id': 0,
+                'node_type': 'Object',
+                'target_char_span': [[0, 0]],
+                'mod_char_span': [],
+                'pron_char_span': [],
+                'rel_char_span': []
+            }]
+            graph_edge = []
 
         # NOTE If no node is parsed, add "this is an object ." at the beginning of the sentence
         if (len(graph_node) < 1) or \
@@ -1404,7 +1526,20 @@ def Scene_graph_parse(annos):
             anno['utterance'] = caption
 
             # parse again
-            graph_node, graph_edge = sng_parser.parse(caption)
+            try:
+                graph_node, graph_edge = sng_parser.parse(caption)
+            except (AssertionError, Exception) as e:
+                print(f"Parse failed again for caption: {caption} - Error: {e}")
+                # 再次设置默认值
+                graph_node = [{
+                    'node_id': 0,
+                    'node_type': 'Object',
+                    'target_char_span': [[0, 4]],  # "This"
+                    'mod_char_span': [],
+                    'pron_char_span': [],
+                    'rel_char_span': []
+                }]
+                graph_edge = []
 
         # node and edge
         anno["graph_node"] = graph_node

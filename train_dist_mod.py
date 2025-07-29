@@ -329,7 +329,9 @@ if __name__ == '__main__':
     opt = parse_option()       
     
     # distributed 
-    torch.cuda.set_device(opt.local_rank)
+    # torch.cuda.set_device(opt.local_rank)
+    local_rank = int(os.environ['LOCAL_RANK'])
+    torch.cuda.set_device(local_rank)
     # https://github.com/open-mmlab/mmcv/issues/1969#issuecomment-1304721237
     torch.distributed.init_process_group(backend='nccl', init_method='env://', timeout=datetime.timedelta(seconds=5400))  
     
