@@ -118,12 +118,17 @@ class TrainTester(BaseTrainTester):
     # BRIEF input data.
     @staticmethod
     def _get_inputs(batch_data):
-        # print(batch_data['utterances'])
-        return {
-            'point_clouds': batch_data['point_clouds'].float(), # ([B, 50000, 6]) xyz + colour
-            'text': batch_data['utterances'],                   # list[B]  text
+        # 基础输入
+        inputs = {
+            'point_clouds': batch_data['point_clouds'].float(),
+            'text': batch_data['utterances'],
             'target_cat': batch_data['target_cat']
         }
+
+        if 'is_negative' in batch_data:
+            inputs['is_negative'] = batch_data['is_negative']
+        
+        return inputs
 
 
     # BRIEF only eval one epoch.

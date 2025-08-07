@@ -500,7 +500,9 @@ class RejectionGroundingEvaluator:
         """
         gt_bboxes_list = end_points['gt_bboxes_3d']
         bbox_results_list = end_points['bbox_results']
-        is_negative_list = end_points['is_negative']
+        # is_negative_list = end_points['is_negative']
+        is_negative_list = end_points.get('is_negative', 
+                                      [False] * len(end_points['gt_bboxes_3d']))
 
         for i in range(len(is_negative_list)):
             is_negative = is_negative_list[i]
