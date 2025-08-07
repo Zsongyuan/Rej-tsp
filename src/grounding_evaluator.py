@@ -559,6 +559,12 @@ class RejectionGroundingEvaluator:
         dist.all_reduce(stats, op=dist.ReduceOp.SUM)
         self.tp, self.tn, self.fp, self.fn, self.pos_count, self.neg_count = stats.tolist()
 
+    def compute_f1(self):
+        precision = self.tp / (self.tp + self.fp + 1e-8)
+        recall = self.tp / (self.tp + self.fn + 1e-8)
+        f1 = 2 * precision * recall / (precision + recall + 1e-8)
+        return f1
+
     def print_stats(self):
         """打印最终的评估结果"""
         total_samples = self.pos_count + self.neg_count
@@ -568,7 +574,7 @@ class RejectionGroundingEvaluator:
         overall_accuracy = (self.tp + self.tn) / (total_samples + 1e-8)
 
         print("\n" + "="*50)
-        print(" 종합 평가 결과 (Comprehensive Evaluation Results) ".center(50, "="))
+        print(" Comprehensive Evaluation Results".center(50, "="))
         print("="*50)
         print(f"  IoU Threshold for Localization: {self.iou_thresh}")
         print(f"  Confidence Threshold for Rejection: {self.rejection_thresh}\n")

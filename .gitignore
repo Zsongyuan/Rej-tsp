@@ -17,3 +17,4 @@ ViGiL3D/
 *.json
 *.tsv
 *.ply
+*_tsp.py

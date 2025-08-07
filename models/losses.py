@@ -571,13 +571,17 @@ class SetCriterion(nn.Module):
         return {"loss_sem_align": tot_loss / num_boxes}
     
     def loss_rejection(self, outputs, targets, indices, num_boxes, auxi_indices):
-        # 仅对负样本计算拒绝损失
-        if targets is None or len(targets) == 0:  # 负样本标志
-            pred_logits = outputs['pred_logits']
-            target_zeros = torch.zeros_like(pred_logits)
-            loss = self.rejection_loss(pred_logits, target_zeros)
-            return {"loss_rejection": loss}
-        return {"loss_rejection": torch.tensor(0.0).to(outputs['pred_logits'].device)}
+        pred_logits = outputs['pred_logits']
+        batch_size = pred_logits.shape[0]
+        rejection_loss = 0
+        
+        for b in range(batch_size):
+            if targets[b].get('is_negative', False):
+                # 对负样本计算拒绝损失
+                target_zeros = torch.zeros_like(pred_logits[b])
+                rejection_loss += self.rejection_loss(pred_logits[b], target_zeros)
+        
+        return {"loss_rejection": rejection_loss / batch_size if batch_size > 0 else 0}
 
 
     def _get_src_permutation_idx(self, indices):
