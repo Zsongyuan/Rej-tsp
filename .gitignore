@@ -1,6 +1,7 @@
 roberta-base/
 pointnet2/
 ScanRefer/
+backup/
 build_scene/
 checkpoints/
 data/
