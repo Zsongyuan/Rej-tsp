@@ -473,3 +473,116 @@ class GroundingEvaluator:
         
         return positive_map, modify_positive_map, pron_positive_map, other_entity_map, auxi_entity_positive_map, \
             rel_positive_map, gt_bboxes
+    
+import torch.distributed as dist
+from models.losses import _iou3d_par, box_cxcyczwhd_to_xyzxyz
+class RejectionGroundingEvaluator:
+    """
+    全面评估定位（grounding）和拒绝（rejection）任务。
+    """
+    def __init__(self, iou_thresh=0.5, rejection_thresh=0.5):
+        self.iou_thresh = iou_thresh
+        self.rejection_thresh = rejection_thresh
+        self.reset()
+
+    def reset(self):
+        """重置所有计数器"""
+        self.tp = 0
+        self.tn = 0
+        self.fp = 0
+        self.fn = 0
+        self.pos_count = 0
+        self.neg_count = 0
+
+    def evaluate(self, end_points, prefix):
+        """
+        在一个批次上进行评估。
+        """
+        gt_bboxes_list = end_points['gt_bboxes_3d']
+        bbox_results_list = end_points['bbox_results']
+        is_negative_list = end_points['is_negative']
+
+        for i in range(len(is_negative_list)):
+            is_negative = is_negative_list[i]
+            
+            if not is_negative:
+                # --- 处理正样本 (定位任务) ---
+                self.pos_count += 1
+                gt_bbox = gt_bboxes_list[i].tensor  # (num_gt, 6)
+                pred_results = bbox_results_list[i]
+                
+                if pred_results['scores_3d'].shape[0] == 0:
+                    # 模型没有做出任何预测，计为FN
+                    self.fn += 1
+                    continue
+
+                # 找到置信度最高的预测框
+                best_score_idx = torch.argmax(pred_results['scores_3d'])
+                best_pred_box = pred_results['bboxes_3d'].tensor[best_score_idx].unsqueeze(0)
+
+                # 计算IoU
+                gt_box_ends = box_cxcyczwhd_to_xyzxyz(gt_bbox)
+                pred_box_ends = box_cxcyczwhd_to_xyzxyz(best_pred_box)
+                
+                iou, _ = _iou3d_par(gt_box_ends.to(pred_box_ends.device), pred_box_ends)
+                
+                if torch.max(iou) >= self.iou_thresh:
+                    self.tp += 1
+                else:
+                    self.fn += 1
+            
+            else:
+                # --- 处理负样本 (拒绝任务) ---
+                self.neg_count += 1
+                pred_results = bbox_results_list[i]
+
+                if pred_results['scores_3d'].shape[0] == 0:
+                    # 模型没有做出任何预测，正确拒绝
+                    self.tn += 1
+                    continue
+                
+                max_confidence = torch.max(pred_results['scores_3d'])
+                
+                if max_confidence < self.rejection_thresh:
+                    # 最高置信度低于阈值，正确拒绝
+                    self.tn += 1
+                else:
+                    # 最高置信度高于阈值，错误定位
+                    self.fp += 1
+
+    def synchronize_between_processes(self):
+        """在分布式训练中同步所有进程的计数器"""
+        stats = torch.tensor([self.tp, self.tn, self.fp, self.fn, self.pos_count, self.neg_count],
+                             device='cuda')
+        dist.all_reduce(stats, op=dist.ReduceOp.SUM)
+        self.tp, self.tn, self.fp, self.fn, self.pos_count, self.neg_count = stats.tolist()
+
+    def print_stats(self):
+        """打印最终的评估结果"""
+        total_samples = self.pos_count + self.neg_count
+        
+        loc_accuracy = self.tp / (self.pos_count + 1e-8)
+        rej_accuracy = self.tn / (self.neg_count + 1e-8)
+        overall_accuracy = (self.tp + self.tn) / (total_samples + 1e-8)
+
+        print("\n" + "="*50)
+        print(" 종합 평가 결과 (Comprehensive Evaluation Results) ".center(50, "="))
+        print("="*50)
+        print(f"  IoU Threshold for Localization: {self.iou_thresh}")
+        print(f"  Confidence Threshold for Rejection: {self.rejection_thresh}\n")
+        
+        print(f"  - Localization on Positive Samples:")
+        print(f"    - Correctly Localized (TP): {self.tp}")
+        print(f"    - Failed to Localize (FN):  {self.fn}")
+        print(f"    - Localization Accuracy (TP / Positives): {loc_accuracy:.4f}\n")
+
+        print(f"  - Rejection on Negative Samples:")
+        print(f"    - Correctly Rejected (TN): {self.tn}")
+        print(f"    - Incorrectly Localized (FP): {self.fp}")
+        print(f"    - Rejection Accuracy (TN / Negatives): {rej_accuracy:.4f}\n")
+
+        print(f"  - Overall Performance:")
+        print(f"    - Total Positive Samples: {self.pos_count}")
+        print(f"    - Total Negative Samples: {self.neg_count}")
+        print(f"    - Overall Accuracy ((TP + TN) / Total): {overall_accuracy:.4f}")
+        print("="*50 + "\n")

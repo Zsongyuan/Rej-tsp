@@ -23,7 +23,6 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
-from torch.cuda.amp import GradScaler, autocast
 
 from models import HungarianMatcher, SetCriterion, compute_hungarian_loss
 from utils import get_scheduler, setup_logger
@@ -119,19 +118,6 @@ def parse_option():
     parser.add_argument('--eval_train', action='store_true')
     parser.add_argument('--pp_checkpoint', default=None)    # pointnet checkpoint
     parser.add_argument('--reduce_lr', action='store_true')
-
-    # rejection
-    parser.add_argument('--use_rejection', action='store_true',
-                        help='Enable training with instruction rejection.')
-    parser.add_argument('--rejection_loss_weight', type=float, default=1.0,
-                        help='Weight for the rejection loss.')
-    parser.add_argument('--positive_sample_ratio', type=float, default=0.5,
-                        help='Ratio of positive samples in a batch when using rejection training.')
-    
-    parser.add_argument('--val_file_path', type=str, default=None,
-                        help='Path to the mixed validation json file.')
-    parser.add_argument('--rejection_thresh', type=float, default=0.5,
-                        help='Confidence threshold to count an instruction as rejected.')
 
     args, _ = parser.parse_known_args()
 
@@ -485,8 +471,7 @@ class BaseTrainTester:
         loss, end_points = criterion(
             end_points, args.num_decoder_layers,
             set_criterion,
-            query_points_obj_topk=args.query_points_obj_topk,
-            rejection_loss_weight=args.rejection_loss_weight if args.use_rejection else 0.0
+            query_points_obj_topk=args.query_points_obj_topk
         )
         return loss, end_points
 
@@ -555,6 +540,7 @@ class BaseTrainTester:
                     for key in sorted(stat_dict.keys())
                     if 'loss' in key
                 ])) # loss，loss_bbox，loss_ce，loss_sem_align，loss_giou，query_points_generation_loss
+
 
     # BRIEF eval 
     @torch.no_grad()

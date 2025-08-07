@@ -19,7 +19,7 @@ import torch.distributed as dist
 from main_utils import parse_option, BaseTrainTester
 from data.model_util_scannet import ScannetDatasetConfig
 from src.joint_det_dataset import Joint3DDataset
-from src.grounding_evaluator import GroundingEvaluator, RejectionGroundingEvaluator
+from src.grounding_evaluator import GroundingEvaluator
 from models import BeaUTyDETR
 from models import APCalculator, parse_predictions, parse_groundtruths
 
@@ -81,8 +81,7 @@ class TrainTester(BaseTrainTester):
             butd=args.butd,
             butd_gt=args.butd_gt,
             butd_cls=args.butd_cls,
-            wo_obj_name=args.wo_obj_name, 
-            val_file_path=args.val_file_path
+            wo_obj_name=args.wo_obj_name
         )
         return train_dataset, test_dataset
 
@@ -132,6 +131,10 @@ class TrainTester(BaseTrainTester):
                            model, criterion, set_criterion, args):
         """
         Eval grounding after a single epoch.
+
+        Some of the args:
+            model: a nn.Module that returns end_points (dict)
+            criterion: a function that returns (loss, end_points)
         """
         # [Option] Object detection evaluation on ScanNet dataset.
         if args.test_dataset == 'scannet':      
@@ -142,26 +145,16 @@ class TrainTester(BaseTrainTester):
 
         stat_dict = {}
         model.eval()  # set model to eval mode (for bn and dp)
-        
-        # <<<<<<<<<<<<<<<<<<<<<<<< START: 修改代码 >>>>>>>>>>>>>>>>>>>>>>>>
-        # 根据是否使用拒绝机制，动态选择和初始化评估器
-        if args.use_rejection and args.val_file_path:
-            self.logger.info("Using RejectionGroundingEvaluator for comprehensive evaluation.")
-            evaluator = RejectionGroundingEvaluator(
-                iou_thresh=0.5,  # 您可以将其改为args参数或保持固定
-                rejection_thresh=args.rejection_thresh
-            )
-        else:
-            self.logger.info("Using original GroundingEvaluator for localization accuracy only.")
-            evaluator = GroundingEvaluator(
-                only_root=True, thresholds=[0.25, 0.5],     
-                topks=[1], prefixes=['3dcnn'],
-                filter_non_gt_boxes=args.butd_cls
-            )
-        # <<<<<<<<<<<<<<<<<<<<<<<< END: 修改代码 >>>>>>>>>>>>>>>>>>>>>>>>
+        prefixes = ['3dcnn']
+
+        evaluator = GroundingEvaluator(
+            only_root=True, thresholds=[0.25, 0.5],     
+            topks=[1], prefixes=prefixes,
+            filter_non_gt_boxes=args.butd_cls
+        )
 
         # NOTE Main eval branch
-        test_loader = tqdm(test_loader, desc=f"Epoch {epoch} Evaluation")
+        test_loader = tqdm(test_loader)
         inf_speeds, vis_back_speeds, text_back_speeds, fuiosn_speeds, head_speeds = [],[],[],[],[]
         for batch_idx, batch_data in enumerate(test_loader):
             # note forward and compute loss
@@ -174,24 +167,25 @@ class TrainTester(BaseTrainTester):
             text_back_speeds.append(detail_time[1])
             fuiosn_speeds.append(detail_time[2])
             head_speeds.append(detail_time[3])
-            
             if evaluator is not None:
-                # 评估器的evaluate方法会根据样本类型执行不同逻辑
-                evaluator.evaluate(end_points, '3dcnn')      
+                for prefix in prefixes:
+                    # note only consider the last layer
+                    if prefix != '3dcnn':
+                        continue
+
+                    # evaluation
+                    evaluator.evaluate(end_points, prefix)      
 
         evaluator.synchronize_between_processes()
-        
         if dist.get_rank() == 0:
             if evaluator is not None:
-                self.logger.info(f'Evaluation results for Epoch [{epoch}]:')
-                evaluator.print_stats() # 新旧评估器都有这个方法，可以统一调用
-                
-                # 保留原始的日志输出（只对GroundingEvaluator有意义）
-                if isinstance(evaluator, GroundingEvaluator):
-                    for t in evaluator.thresholds:
-                        self.logger.info(''.join([
-                            f"{'3dcnn'} Acc@{t:.2f}: ", f"Top-{1}: {evaluator.dets[('3dcnn', t, 1, 'bbf')] / max(evaluator.gts[('3dcnn', t, 1, 'bbf')], 1):.5f}"
-                        ]))
+
+                evaluator.print_stats()
+                self.logger.info(f'Eval: [{epoch}]  ')
+                for t in evaluator.thresholds:
+                    self.logger.info(''.join([
+                        f"{'3dcnn'} Acc{t:.2f}: ", f"Top-{1}: {evaluator.dets[('3dcnn', t, 1, 'bbf')] / max(evaluator.gts[('3dcnn', t, 1, 'bbf')], 1):.5f}"
+                    ]))           
 
         print('inf: ', np.array(inf_speeds).mean(),'vis_back_speeds: ', np.array(vis_back_speeds).mean(),
               'text_back_speeds: ', np.array(text_back_speeds).mean(),'fuiosn_speeds: ', np.array(fuiosn_speeds).mean(),

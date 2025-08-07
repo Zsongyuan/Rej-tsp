@@ -2,8 +2,8 @@ import open3d as o3d
 import numpy as np
 
 # 定义路径（替换为你的实际路径和 scan_id）
-scan_path = "../TSP3D-main/scannet/scans/scene0000_02"  # 示例路径
-scan_id = "scene0000_02"
+scan_path = "../TSP3D-main/scannet/scans/scene0167_00"  # 示例路径
+scan_id = "scene0167_00"
 ply_file = f"{scan_path}/{scan_id}_vh_clean_2.ply"
 
 # 步骤 1: 加载三角网格

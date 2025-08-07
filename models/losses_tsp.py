@@ -340,8 +340,7 @@ class SetCriterion(nn.Module):
         self.eos_coef = eos_coef    # 0.1
         self.losses = losses
         self.temperature = temperature
-        self.rejection_loss = nn.BCEWithLogitsLoss(reduction='mean')
-
+    
     #####################################
     # BRIEF dense position-aligned loss #
     #####################################
@@ -569,21 +568,6 @@ class SetCriterion(nn.Module):
         # total loss
         tot_loss = (box_to_token_loss + token_to_box_loss) / 2
         return {"loss_sem_align": tot_loss / num_boxes}
-    
-    def loss_rejection(self, outputs, targets, indices, num_boxes, auxi_indices):
-        """
-        Compute the rejection loss.
-        """
-        pred_logits = outputs['pred_logits'] # [batch_size, num_queries, num_classes]
-        
-        # 在我们的设计中，num_classes=1，所以logits的最后一维是对象性分数
-        # 目标是全0
-        target_zeros = torch.zeros_like(pred_logits)
-        
-        # 使用BCEWithLogitsLoss计算损失
-        loss = self.rejection_loss(pred_logits, target_zeros)
-        
-        return {"loss_rejection": loss}
 
 
     def _get_src_permutation_idx(self, indices):
@@ -607,13 +591,12 @@ class SetCriterion(nn.Module):
         loss_map = {
             'boxes': self.loss_boxes,      # box loss
             'labels': self.loss_pos_align, # position alignment
-            'contrastive_align': self.loss_sem_align,    # semantic alignment
-            'rejection': self.loss_rejection 
+            'contrastive_align': self.loss_sem_align   # semantic alignment
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, auxi_indices, **kwargs)
 
-    '''def forward(self, outputs, targets):
+    def forward(self, outputs, targets):
         """
         Perform the loss computation.
 
@@ -621,7 +604,6 @@ class SetCriterion(nn.Module):
              outputs: dict of tensors
              targets: list of dicts, such that len(targets) == batch_size.
         """
-
         # STEP Retrieve the matching between outputs and targets
         indices = self.matcher(outputs, targets)
 
@@ -651,59 +633,11 @@ class SetCriterion(nn.Module):
                 loss, outputs, targets, indices, num_boxes, auxi_indices
             ))
 
-        return losses, indices'''
-    
-    def forward(self, outputs, targets):
-        """
-        Perform the loss computation.
-        """
-        is_negative_batch = torch.tensor([t.get('is_negative', False) for t in targets], device=outputs['pred_logits'].device)
-        
-        positive_targets = [t for t, is_neg in zip(targets, is_negative_batch) if not is_neg]
-        positive_outputs = {}
-        
-        losses = {}
-
-        # 仅对正样本进行匹配和定位损失计算
-        if len(positive_targets) > 0:
-            # 筛选出正样本的输出
-            positive_indices_mask = ~is_negative_batch
-            for key, value in outputs.items():
-                if isinstance(value, torch.Tensor) and value.shape[0] == len(is_negative_batch):
-                    positive_outputs[key] = value[positive_indices_mask]
-                else:
-                    positive_outputs[key] = value # 对于非batch维度的张量，直接复制
-
-            indices = self.matcher(positive_outputs, positive_targets)
-            
-            num_boxes = sum(len(inds[1]) for inds in indices)
-            num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=outputs['pred_logits'].device)
-            if is_dist_avail_and_initialized():
-                torch.distributed.all_reduce(num_boxes)
-            
-            # 仅对正样本计算原有损失
-            for loss in self.losses:
-                losses.update(self.get_loss(loss, positive_outputs, positive_targets, indices, num_boxes, None))
-
-        # 对负样本计算拒绝损失
-        if is_negative_batch.any():
-            negative_outputs = {}
-            # 筛选出负样本的输出
-            negative_indices_mask = is_negative_batch
-            for key, value in outputs.items():
-                if isinstance(value, torch.Tensor) and value.shape[0] == len(is_negative_batch):
-                    negative_outputs[key] = value[negative_indices_mask]
-                else:
-                    negative_outputs[key] = value
-            
-            # 负样本不需要target，indices或num_boxes
-            losses.update(self.get_loss('rejection', negative_outputs, None, None, None, None))
-
-        return losses
+        return losses, indices
 
 # BRIEF loss
 def compute_hungarian_loss(end_points, num_decoder_layers, set_criterion,
-                           query_points_obj_topk=5, rejection_loss_weight=1.0):
+                           query_points_obj_topk=5):
     """Compute Hungarian matching loss containing CE, bbox and giou."""
     prefixes = ['last_'] + [f'{i}head_' for i in range(num_decoder_layers - 1)]
     prefixes = ['proposal_'] + prefixes     # 6+1: 'proposal_'  'last_' '0head_'  '1head_'  '2head_'  '3head_'  '4head_'
@@ -722,13 +656,11 @@ def compute_hungarian_loss(end_points, num_decoder_layers, set_criterion,
     box_label_mask = end_points['box_label_mask']           # (132,) target object mask
     auxi_entity_positive_map = end_points['auxi_entity_positive_map']
     auxi_box = end_points['auxi_box']
-    is_negative_list = end_points['is_negative']
 
     target = [
         {
             "labels": gt_labels[b, box_label_mask[b].bool()],
             "boxes": gt_bbox[b, box_label_mask[b].bool()],
-            "is_negative": is_negative_list[b],
             "positive_map": positive_map[b, box_label_mask[b].bool()],
             "modify_positive_map": modify_positive_map[b, box_label_mask[b].bool()],
             "pron_positive_map": pron_positive_map[b, box_label_mask[b].bool()],
@@ -740,7 +672,7 @@ def compute_hungarian_loss(end_points, num_decoder_layers, set_criterion,
         for b in range(gt_labels.shape[0])
     ]
 
-    loss_ce, loss_bbox, loss_giou, loss_sem_align, loss_rejection = 0, 0, 0, 0, 0
+    loss_ce, loss_bbox, loss_giou, loss_sem_align = 0, 0, 0, 0
     for prefix in prefixes:
         output = {}
         if 'proj_tokens' in end_points:
@@ -766,7 +698,6 @@ def compute_hungarian_loss(end_points, num_decoder_layers, set_criterion,
         loss_giou += losses.get('loss_giou', 0)
         if 'proj_tokens' in end_points:
             loss_sem_align += losses['loss_sem_align']
-        loss_rejection += losses.get('loss_rejection', 0)
 
     if 'seeds_obj_cls_logits' in end_points.keys():
         query_points_generation_loss = compute_points_obj_cls_loss_hard_topk(
@@ -787,14 +718,12 @@ def compute_hungarian_loss(end_points, num_decoder_layers, set_criterion,
             + loss_giou
             + weight * loss_sem_align
         )
-        + rejection_loss_weight * loss_rejection
     )
     end_points['loss_ce'] = loss_ce
     end_points['loss_bbox'] = loss_bbox
     end_points['loss_giou'] = loss_giou
     end_points['query_points_generation_loss'] = query_points_generation_loss
     end_points['loss_sem_align'] = loss_sem_align
-    end_points['loss_rejection'] = loss_rejection
     end_points['loss'] = loss
     return loss, end_points
 

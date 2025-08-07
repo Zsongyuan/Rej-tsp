@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from transformers import RobertaTokenizerFast
-# import wandb
+import wandb
 
 import copy,sys
 
@@ -50,7 +50,7 @@ class Joint3DDataset(Dataset):
                  use_color=False, use_height=False, use_multiview=False,
                  detect_intermediate=False,
                  butd=False, butd_gt=False, butd_cls=False, augment_det=False,
-                 wo_obj_name="None", val_file_path=None):
+                 wo_obj_name="None"):
         """Initialize dataset (here for ReferIt3D utterances)."""
         self.dataset_dict = dataset_dict
         self.test_dataset = test_dataset
@@ -74,8 +74,6 @@ class Joint3DDataset(Dataset):
         )
         self.augment_det = augment_det
         self.wo_obj_name = wo_obj_name
-
-        self.val_file_path = val_file_path
 
         self.mean_rgb = np.array([109.8, 97.2, 83.8]) / 256
         
@@ -112,27 +110,13 @@ class Joint3DDataset(Dataset):
             with open('data/cls_results.json') as fid:
                 self.cls_results = json.load(fid)
 
-        # print('Loading %s files, take a breath!' % split)
+        print('Loading %s files, take a breath!' % split)
         
         # step 3. generate or load train/val_v3scans.pkl
-        '''if not os.path.exists(f'{self.data_path}/{split}_v3scans.pkl'):
+        if not os.path.exists(f'{self.data_path}/{split}_v3scans.pkl'):
             save_data(f'{data_path}/{split}_v3scans.pkl', split, data_path)
         self.scans = unpickle_data(f'{self.data_path}/{split}_v3scans.pkl')
-        self.scans = list(self.scans)[0]'''
-        print("Loading train and val scan data...")
-        if not os.path.exists(f'{self.data_path}/train_v3scans.pkl'):
-            save_data(f'{data_path}/train_v3scans.pkl', 'train', data_path)
-        
-        if not os.path.exists(f'{self.data_path}/val_v3scans.pkl'):
-            save_data(f'{data_path}/val_v3scans.pkl', 'val', data_path)
-            
-        # 加载训练集和验证集的scans
-        train_scans = list(unpickle_data(f'{self.data_path}/train_v3scans.pkl'))[0]
-        val_scans = list(unpickle_data(f'{self.data_path}/val_v3scans.pkl'))[0]
-        
-        # 合并到一个self.scans字典中
-        self.scans = {**train_scans, **val_scans}
-        print(f"Total scans loaded: {len(self.scans)}")
+        self.scans = list(self.scans)[0]
         
         # step 4. load text dataset
         if self.split != 'train':
@@ -280,55 +264,31 @@ class Joint3DDataset(Dataset):
         split = self.split
         if split in ('val', 'test'):
             split = 'val'
-
-        # <<<<<<<<<<<<<<<<<<<<<<<< START: 更正后的代码 >>>>>>>>>>>>>>>>>>>>>>>>
-        # 默认的JSON文件路径
-        default_json_path = _path + '_%s.json' % split
-        
-        # --- 验证集加载逻辑 ---
-        if split == 'val' and self.val_file_path:
-            # 如果是验证模式，且指定了val_file_path，则使用它
-            json_path = self.val_file_path
-            print(f"Loading custom validation annotations from: {json_path}")
-        else:
-            # 否则，使用默认路径
-            json_path = default_json_path
-
-        # 加载标注文件
-        with open(json_path) as f:
+        with open(_path + '_%s.txt' % split) as f:  # ScanRefer_filtered_train.txt
+            scan_ids = [line.rstrip().strip('\n') for line in f.readlines()]
+        with open(_path + '_%s.json' % split) as f:
             reader = json.load(f)
-
-        # --- 训练集覆盖逻辑 ---
-        # 如果是训练模式，且指定了wo_obj_name，则用其内容覆盖reader
-        if split == 'train' and self.wo_obj_name and self.wo_obj_name != "None":
-            print(f"Overriding train annotations with: {self.wo_obj_name}")
+        if self.wo_obj_name != "None":
             with open(self.wo_obj_name) as f:
                 reader = json.load(f)
-        # <<<<<<<<<<<<<<<<<<<<<<<< END: 更正后的代码 >>>>>>>>>>>>>>>>>>>>>>>>
-
-        # 加载场景ID列表（这部分主要用于筛选，可以保留）
-        with open(_path + '_%s.txt' % split) as f:
-            scan_ids = [line.rstrip().strip('\n') for line in f.readlines()]
         
         # STEP 1. load utterance
         annos = [
             {
                 'scan_id': anno['scene_id'],
                 'target_id': int(anno['object_id']),
+                # 'ann_id': int(anno['ann_id']),
                 'distractor_ids': [],
                 'utterance': ' '.join(anno['token']),
                 'target': ' '.join(str(anno['object_name']).split('_')),
                 'anchors': [],      
                 'anchor_ids': [],   
                 'dataset': 'scanrefer',
-                'target_cat': self.raw2label.get(' '.join(str(anno['object_name']).split('_')), 17),
-                # 新增 is_negative 字段，默认为False
-                'is_negative': anno.get('is_negative', False)
+                'target_cat': self.raw2label[' '.join(str(anno['object_name']).split('_'))] if ' '.join(str(anno['object_name']).split('_')) in self.raw2label else 17
             }
             for anno in reader
             if anno['scene_id'] in scan_ids
         ]
-
 
         ###########################
         # STEP 2. text decoupling #
@@ -1023,9 +983,6 @@ class Joint3DDataset(Dataset):
         scan = self.scans[anno['scan_id']]
         scan.pc = np.copy(scan.orig_pc)
 
-        # Check Negative
-        is_negative_sample = anno.get('is_negative', False)
-
         # step constract anno (used only for [scannet])
         self.random_utt = False
         if anno['dataset'] == 'scannet':
@@ -1078,13 +1035,8 @@ class Joint3DDataset(Dataset):
         point_cloud, augmentations, og_color = self._get_pc(anno, scan)
 
         # step "Target" boxes: append anchors if they're to be detected
-        if is_negative_sample:
-            gt_bboxes = np.zeros((MAX_NUM_OBJ, 6))
-            box_label_mask = np.zeros(MAX_NUM_OBJ)
-            point_instance_label = -np.ones(len(scan.pc))
-        else:
-            gt_bboxes, box_label_mask, point_instance_label = \
-                self._get_target_boxes(anno, scan)
+        gt_bboxes, box_label_mask, point_instance_label = \
+            self._get_target_boxes(anno, scan)
 
         # step Scene gt boxes
         (
@@ -1147,7 +1099,6 @@ class Joint3DDataset(Dataset):
             'center_label': gt_bboxes[:, :3].astype(np.float32),
             'sem_cls_label': _labels.astype(np.int64),
             'size_gts': gt_bboxes[:, 3:].astype(np.float32),
-            'is_negative': is_negative_sample,
         }
         ret_dict.update({
             "scan_ids": anno['scan_id'],
@@ -1264,7 +1215,7 @@ class Joint3DDataset(Dataset):
             i.item() for i in distractor_ids if i != -1
         ]]
 
-        '''wandb.log({
+        wandb.log({
             "ground_truth_point_scene": wandb.Object3D({
                 "type": "lidar/beta",
                 "points": point_cloud,
@@ -1308,7 +1259,7 @@ class Joint3DDataset(Dataset):
                 )
             }),
             "utterance": wandb.Html(anno['utterance']),
-        })'''
+        })
     
     def __len__(self):
         """Return number of utterances."""
