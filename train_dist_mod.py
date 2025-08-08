@@ -47,8 +47,12 @@ class TrainTester(BaseTrainTester):
         dataset_dict = {}  # dict to use multiple datasets
         for dset in args.dataset:
             dataset_dict[dset] = 1
-        if args.joint_det:
+        
+        if args.joint_det and (args.wo_obj_name is None or args.wo_obj_name == "None"):
             dataset_dict['scannet'] = 10
+        elif args.joint_det:
+            print("[INFO] --wo_obj_name is provided. Skipping default 'scannet' dataset loading for training.")
+            
         print('Loading datasets:', sorted(list(dataset_dict.keys())))
 
         if args.eval:

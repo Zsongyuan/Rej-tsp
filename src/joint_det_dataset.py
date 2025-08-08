@@ -283,28 +283,26 @@ class Joint3DDataset(Dataset):
 
         # <<<<<<<<<<<<<<<<<<<<<<<< START: 更正后的代码 >>>>>>>>>>>>>>>>>>>>>>>>
         # 默认的JSON文件路径
-        default_json_path = _path + '_%s.json' % split
+        # default_json_path = _path + '_%s.json' % split
+        json_path = None
         
         # --- 验证集加载逻辑 ---
-        if split == 'val' and self.val_file_path:
-            # 如果是验证模式，且指定了val_file_path，则使用它
+        if split == 'train' and self.wo_obj_name and self.wo_obj_name != "None":
+            json_path = self.wo_obj_name
+            print(f"Loading custom training annotations from: {json_path}")
+        # 再处理验证集的覆盖逻辑
+        elif split == 'val' and self.val_file_path:
             json_path = self.val_file_path
             print(f"Loading custom validation annotations from: {json_path}")
-        else:
-            # 否则，使用默认路径
-            json_path = default_json_path
+        
+        # 如果没有指定任何自定义路径，则使用默认路径
+        if json_path is None:
+            json_path = _path + '_%s.json' % split
+            print(f"Loading default annotations from: {json_path}")
 
         # 加载标注文件
         with open(json_path) as f:
             reader = json.load(f)
-
-        # --- 训练集覆盖逻辑 ---
-        # 如果是训练模式，且指定了wo_obj_name，则用其内容覆盖reader
-        if split == 'train' and self.wo_obj_name and self.wo_obj_name != "None":
-            print(f"Overriding train annotations with: {self.wo_obj_name}")
-            with open(self.wo_obj_name) as f:
-                reader = json.load(f)
-        # <<<<<<<<<<<<<<<<<<<<<<<< END: 更正后的代码 >>>>>>>>>>>>>>>>>>>>>>>>
 
         # 加载场景ID列表（这部分主要用于筛选，可以保留）
         with open(_path + '_%s.txt' % split) as f:
