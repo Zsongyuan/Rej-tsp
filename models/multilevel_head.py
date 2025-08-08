@@ -722,7 +722,7 @@ class TSPHead(nn.Module):
             )
             losses['rejection_loss'] = rejection_loss
         else:
-            losses['rejection_loss'] = torch.tensor(0.0, device=x.device)
+            losses['rejection_loss'] = torch.tensor(0.0, device=x[0].device)
         
         return losses
     

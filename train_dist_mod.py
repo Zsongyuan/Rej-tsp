@@ -183,10 +183,10 @@ class TrainTester(BaseTrainTester):
                 criterion, set_criterion, args
             )
             inf_speeds.append(inf_speed)
-            vis_back_speeds.append(detail_time[0])
-            text_back_speeds.append(detail_time[1])
-            fuiosn_speeds.append(detail_time[2])
-            head_speeds.append(detail_time[3])
+            vis_back_speeds.append(detail_time.get(0, 0.0))
+            text_back_speeds.append(detail_time.get(1, 0.0))
+            fuiosn_speeds.append(detail_time.get(2, 0.0))
+            head_speeds.append(detail_time.get(3, 0.0))
             
             if evaluator is not None:
                 # 评估器的evaluate方法会根据样本类型执行不同逻辑

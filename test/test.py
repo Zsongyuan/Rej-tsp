@@ -13,8 +13,8 @@ ORIGINAL_DATA_DIR = '../tns/' # 假设您的原始json文件在此目录下
 SAMPLE_DATA_DIR = './'
 
 # 您希望抽取的样本数量
-NUM_TRAIN_SAMPLES = 1000
-NUM_VAL_SAMPLES = 200
+NUM_TRAIN_SAMPLES = 50
+NUM_VAL_SAMPLES = 10
 
 # --- 脚本主逻辑 (通常无需修改) ---
 

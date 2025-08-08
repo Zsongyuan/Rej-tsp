@@ -552,7 +552,7 @@ class BaseTrainTester:
 
 
     # BRIEF Training
-    def train_one_epoch_complete(self, epoch, train_loader, model,
+    def train_one_epoch(self, epoch, train_loader, model,
                                 criterion, set_criterion,
                                 optimizer, scheduler, args):
         """完整的训练函数，显示所有loss组件"""
