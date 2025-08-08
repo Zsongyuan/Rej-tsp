@@ -496,60 +496,68 @@ class RejectionGroundingEvaluator:
 
     def evaluate(self, end_points, prefix):
         """
-        在一个批次上进行评估。
+        Evaluate on a batch.
         """
         gt_bboxes_list = end_points['gt_bboxes_3d']
         bbox_results_list = end_points['bbox_results']
-        # is_negative_list = end_points['is_negative']
-        is_negative_list = end_points.get('is_negative', 
+        is_negative_list = end_points.get('is_negative',
                                       [False] * len(end_points['gt_bboxes_3d']))
 
         for i in range(len(is_negative_list)):
             is_negative = is_negative_list[i]
-            
+
             if not is_negative:
-                # --- 处理正样本 (定位任务) ---
+                # --- Handle positive samples (localization task) ---
                 self.pos_count += 1
-                gt_bbox = gt_bboxes_list[i].tensor  # (num_gt, 6)
+                gt_bbox = gt_bboxes_list[i].tensor
                 pred_results = bbox_results_list[i]
-                
+
                 if pred_results['scores_3d'].shape[0] == 0:
-                    # 模型没有做出任何预测，计为FN
                     self.fn += 1
+                    if i == 0 and dist.get_rank() == 0:
+                        print(f"\n[DEBUG] Positive Sample | No prediction made. Counted as FN.")
                     continue
 
-                # 找到置信度最高的预测框
                 best_score_idx = torch.argmax(pred_results['scores_3d'])
                 best_pred_box = pred_results['bboxes_3d'].tensor[best_score_idx].unsqueeze(0)
 
-                # 计算IoU
-                gt_box_ends = box_cxcyczwhd_to_xyzxyz(gt_bbox)
-                pred_box_ends = box_cxcyczwhd_to_xyzxyz(best_pred_box)
-                
+                # --- CORRECTED PRINT STATEMENT ---
+                best_score = pred_results['scores_3d'][best_score_idx]
+                if i == 0 and dist.get_rank() == 0:
+                    # Use .item() to convert the tensor to a Python float
+                    print(f"\n[DEBUG] Positive Sample | Max Confidence: {best_score.item():.4f}")
+
+                gt_box_ends = box_cxcyczwhd_to_xyzxyz(gt_bbox[:, :6])
+                pred_box_ends = box_cxcyczwhd_to_xyzxyz(best_pred_box[:, :6])
+
                 iou, _ = _iou3d_par(gt_box_ends.to(pred_box_ends.device), pred_box_ends)
-                
+
                 if torch.max(iou) >= self.iou_thresh:
                     self.tp += 1
                 else:
                     self.fn += 1
-            
+
             else:
-                # --- 处理负样本 (拒绝任务) ---
+                # --- Handle negative samples (rejection task) ---
                 self.neg_count += 1
                 pred_results = bbox_results_list[i]
 
                 if pred_results['scores_3d'].shape[0] == 0:
-                    # 模型没有做出任何预测，正确拒绝
                     self.tn += 1
+                    if i == 0 and dist.get_rank() == 0:
+                        print(f"\n[DEBUG] Negative Sample | No prediction made. Correctly Rejected (TN).")
                     continue
-                
+
                 max_confidence = torch.max(pred_results['scores_3d'])
-                
+
+                # --- CORRECTED PRINT STATEMENT ---
+                if i == 0 and dist.get_rank() == 0:
+                    # Use .item() to convert the tensor to a Python float
+                    print(f"\n[DEBUG] Negative Sample | Max Confidence: {max_confidence.item():.4f}")
+
                 if max_confidence < self.rejection_thresh:
-                    # 最高置信度低于阈值，正确拒绝
                     self.tn += 1
                 else:
-                    # 最高置信度高于阈值，错误定位
                     self.fp += 1
 
     def synchronize_between_processes(self):

@@ -43,7 +43,7 @@ class TrainTester(BaseTrainTester):
     @staticmethod
     def get_datasets(args):
         """Initialize datasets."""
-
+        
         dataset_dict = {}  # dict to use multiple datasets
         for dset in args.dataset:
             dataset_dict[dset] = 1
@@ -70,7 +70,11 @@ class TrainTester(BaseTrainTester):
                 butd=args.butd,
                 butd_gt=args.butd_gt,
                 butd_cls=args.butd_cls,
-                augment_det=args.augment_det
+                augment_det=args.augment_det,
+                wo_obj_name=args.wo_obj_name, 
+                val_file_path=None, 
+                rejection_start_epoch=args.rejection_start_epoch,
+                start_epoch=args.start_epoch
             )
         
         test_dataset = Joint3DDataset(

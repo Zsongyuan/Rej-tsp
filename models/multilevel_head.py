@@ -658,11 +658,33 @@ class TSPHead(nn.Module):
             pos_masks.append(pos_mask)
             pos_masks_com.append(pos_mask_com)
 
+        if bbox_losses:
+            final_bbox_loss = self.bbox_loss_weight * torch.mean(torch.cat(bbox_losses))
+        else:
+            # 如果为空, 创建一个需要梯度的零张量作为损失
+            final_bbox_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
+
+        # 检查pos_masks的总和以避免除零
+        total_pos = torch.sum(torch.cat(pos_masks))
+        if total_pos > 0:
+            final_cls_loss = torch.sum(torch.cat(cls_losses)) / total_pos
+        else:
+            final_cls_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
+            
+        # 检查pos_masks_com的总和以避免除零
+        total_pos_com = torch.sum(torch.cat(pos_masks_com))
+        if total_pos_com > 0:
+            final_com_loss = torch.sum(torch.cat(com_losses)) / total_pos_com
+        else:
+            final_com_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
+
+
         return dict(
-            bbox_loss=self.bbox_loss_weight * torch.mean(torch.cat(bbox_losses)),
-            cls_loss=torch.sum(torch.cat(cls_losses)) / torch.sum(torch.cat(pos_masks)),
+            bbox_loss=final_bbox_loss,
+            cls_loss=final_cls_loss,
             keep_loss=self.keep_loss_weight * keep_losses / len(img_metas),
-            com_loss=torch.sum(torch.cat(com_losses)) / torch.sum(torch.cat(pos_masks_com))) 
+            com_loss=final_com_loss
+        )
 
 
     def forward_train(self, x, text_feats, text_attention_mask, gt_bboxes, gt_labels, gt_all_bbox_new, auxi_bbox, img_metas,pc=None):

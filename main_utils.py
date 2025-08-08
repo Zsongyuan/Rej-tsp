@@ -132,6 +132,8 @@ def parse_option():
                         help='Path to the mixed validation json file.')
     parser.add_argument('--rejection_thresh', type=float, default=0.5,
                         help='Confidence threshold to count an instruction as rejected.')
+    parser.add_argument('--rejection_start_epoch', type=int, default=1,
+                        help='Epoch to start training with rejection samples and loss.')
 
     args, _ = parser.parse_known_args()
 
@@ -365,7 +367,7 @@ class BaseTrainTester:
         # note Distributed Data-Parallel Training (DDP)
         model = DistributedDataParallel(
             model, device_ids=[args.local_rank],
-            broadcast_buffers=False  , find_unused_parameters=False
+            broadcast_buffers=False  , find_unused_parameters=True
         )
 
         # Check for a checkpoint
@@ -518,17 +520,23 @@ class BaseTrainTester:
         model.train()  # set model to training mode
 
         # Loop over batches
-        train_loader = tqdm(train_loader)
+        train_loader = tqdm(train_loader, desc=f"Epoch {epoch} Training")
         for batch_idx, batch_data in enumerate(train_loader):
+            # 从 batch_data 中获取 GT 信息
+            # 注意: get_gt 函数需要您根据您的项目结构来定义或确认其存在
             gt_bboxes_3d, gt_labels_3d, gt_all_bbox_new, auxi_bbox, img_metas = get_gt(batch_data)
+            
             # Move to GPU
             batch_data = self._to_gpu(batch_data)
+            
             # get the input data: pointcloud and text
             inputs = self._get_inputs(batch_data)
             
+            # Forward pass
             losses = model(inputs, gt_bboxes_3d, gt_labels_3d, gt_all_bbox_new, auxi_bbox, img_metas, epoch)
             loss = losses['loss']
 
+            # Backward pass
             optimizer.zero_grad()
             loss.backward()
 
@@ -536,25 +544,44 @@ class BaseTrainTester:
                 grad_total_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(), args.clip_norm
                 )
-                stat_dict['grad_norm'] = grad_total_norm
+                # 将梯度范数存入losses字典，以便_accumulate_stats可以处理它
+                losses['grad_norm'] = grad_total_norm
             
             optimizer.step()
             scheduler.step()
 
-            # Accumulate statistics and print out
+            # Accumulate statistics
+            # _accumulate_stats 会遍历losses字典并累加到stat_dict中
             stat_dict = self._accumulate_stats(stat_dict, losses)
 
-            # print loss
+            # Print loss
             if (batch_idx + 1) % args.print_freq == 0:
-                # Terminal logs
-                self.logger.info(
-                    f'Train: [{epoch}][{batch_idx + 1}/{len(train_loader)}]  '  # Train: [30][2000/2432]
-                )
-                self.logger.info(''.join([
-                    f'{key} {stat_dict[key] / (batch_idx + 1):.4f} \t'
-                    for key in sorted(stat_dict.keys())
-                    if 'loss' in key
-                ])) # loss，loss_bbox，loss_ce，loss_sem_align，loss_giou，query_points_generation_loss
+                # --- 从这里开始是修改后的日志打印逻辑 ---
+                
+                # 准备日志字符串
+                log_message = f'Train: [{epoch}][{batch_idx + 1}/{len(train_loader)}] | '
+                
+                # 提取所有损失相关的键并排序
+                loss_keys = sorted([key for key in stat_dict.keys() if 'loss' in key])
+                
+                # 获取总损失的平均值
+                avg_total_loss = stat_dict['loss'] / (batch_idx + 1)
+                log_message += f'Total Loss: {avg_total_loss:.4f} | '
+                
+                # 拼接其他损失分量的平均值
+                other_losses_msg = []
+                for key in loss_keys:
+                    if key != 'loss': # 避免重复打印总损失
+                        avg_loss = stat_dict[key] / (batch_idx + 1)
+                        # 简化键名以便打印 (e.g., 'loss_bbox' -> 'BBox')
+                        simple_key = key.replace('loss_', '').capitalize()
+                        other_losses_msg.append(f'{simple_key}: {avg_loss:.4f}')
+                
+                log_message += ' | '.join(other_losses_msg)
+                
+                # 打印最终格式化的日志
+                self.logger.info(log_message)
+                # --- 日志打印逻辑修改结束 ---
 
     # BRIEF eval 
     @torch.no_grad()

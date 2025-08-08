@@ -50,7 +50,8 @@ class Joint3DDataset(Dataset):
                  use_color=False, use_height=False, use_multiview=False,
                  detect_intermediate=False,
                  butd=False, butd_gt=False, butd_cls=False, augment_det=False,
-                 wo_obj_name="None", val_file_path=None):
+                 wo_obj_name="None", val_file_path=None, 
+                 rejection_start_epoch=1, start_epoch=1):
         """Initialize dataset (here for ReferIt3D utterances)."""
         self.dataset_dict = dataset_dict
         self.test_dataset = test_dataset
@@ -143,6 +144,13 @@ class Joint3DDataset(Dataset):
                 if cnt > 0:
                     _annos = self.load_annos(dset)
                     self.annos += (_annos * cnt)
+                    
+        if self.split == 'train' and start_epoch < rejection_start_epoch:
+            print(f"\n[Curriculum Learning] Current epoch {start_epoch} is less than rejection_start_epoch {rejection_start_epoch}.")
+            print(f"Filtering dataset to use POSITIVE SAMPLES ONLY.")
+            original_len = len(self.annos)
+            self.annos = [anno for anno in self.annos if not anno.get('is_negative', False)]
+            print(f"Dataset size reduced from {original_len} to {len(self.annos)}.\n")
 
         # if self.visualize:
         #     wandb.init(project="vis", name="debug")
