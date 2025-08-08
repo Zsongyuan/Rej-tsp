@@ -711,25 +711,26 @@ class SetCriterion(nn.Module):
 # BRIEF loss
 def compute_hungarian_loss(end_points, num_decoder_layers, set_criterion,
                            query_points_obj_topk=5, rejection_loss_weight=1.0):
-    """Compute Hungarian matching loss containing CE, bbox and giou."""
+    """Compute Hungarian matching loss containing CE, bbox, giou and rejection."""
     prefixes = ['last_'] + [f'{i}head_' for i in range(num_decoder_layers - 1)]
-    prefixes = ['proposal_'] + prefixes     # 6+1: 'proposal_'  'last_' '0head_'  '1head_'  '2head_'  '3head_'  '4head_'
+    prefixes = ['proposal_'] + prefixes
 
-    # STEP target GT box
+    # Target GT box
     gt_center = end_points['center_label'][:, :, 0:3]
     gt_size = end_points['size_gts']
     gt_labels = end_points['sem_cls_label']
     gt_bbox = torch.cat([gt_center, gt_size], dim=-1)
-    # text
-    positive_map = end_points['positive_map']               # main obj.
-    modify_positive_map = end_points['modify_positive_map'] # attribute(modify)
-    pron_positive_map = end_points['pron_positive_map']     # pron
-    other_entity_map = end_points['other_entity_map']       # other(auxi)
-    rel_positive_map = end_points['rel_positive_map']       # relation
-    box_label_mask = end_points['box_label_mask']           # (132,) target object mask
+    
+    # Text position labels
+    positive_map = end_points['positive_map']
+    modify_positive_map = end_points['modify_positive_map']
+    pron_positive_map = end_points['pron_positive_map']
+    other_entity_map = end_points['other_entity_map']
+    rel_positive_map = end_points['rel_positive_map']
+    box_label_mask = end_points['box_label_mask']
     auxi_entity_positive_map = end_points['auxi_entity_positive_map']
     auxi_box = end_points['auxi_box']
-    is_negative_list = end_points['is_negative']
+    is_negative_list = end_points.get('is_negative', [False] * gt_labels.shape[0])
 
     target = [
         {
@@ -747,7 +748,10 @@ def compute_hungarian_loss(end_points, num_decoder_layers, set_criterion,
         for b in range(gt_labels.shape[0])
     ]
 
+    # 初始化所有loss组件
     loss_ce, loss_bbox, loss_giou, loss_sem_align, loss_rejection = 0, 0, 0, 0, 0
+    loss_query_points = 0
+    
     for prefix in prefixes:
         output = {}
         if 'proj_tokens' in end_points:
@@ -755,54 +759,62 @@ def compute_hungarian_loss(end_points, num_decoder_layers, set_criterion,
             output['proj_queries'] = end_points[f'{prefix}proj_queries']
             output['tokenized'] = end_points['tokenized']
 
-        # STEP Get predicted boxes and labels
-        pred_center = end_points[f'{prefix}center']     # B, K, 3
-        pred_size = end_points[f'{prefix}pred_size']    # (B,K,3) (l,w,h) K=256
+        # Get predicted boxes and labels
+        pred_center = end_points[f'{prefix}center']
+        pred_size = end_points[f'{prefix}pred_size']
         pred_bbox = torch.cat([pred_center, pred_size], dim=-1)
-        pred_logits = end_points[f'{prefix}sem_cls_scores']     # (B, Q, n_class) Q=256
+        pred_logits = end_points[f'{prefix}sem_cls_scores']
         output['pred_logits'] = pred_logits
         output["pred_boxes"] = pred_bbox
-        output["language_dataset"] = end_points["language_dataset"] # dataset
+        output["language_dataset"] = end_points["language_dataset"]
 
-        # NOTE Compute all the requested losses, forward
-        losses, _ = set_criterion(output, target)
+        # Compute all the requested losses
+        losses = set_criterion(output, target)
+        
+        # 累加各个loss组件
         for loss_key in losses.keys():
             end_points[f'{prefix}_{loss_key}'] = losses[loss_key]
+        
         loss_ce += losses.get('loss_ce', 0)
-        loss_bbox += losses['loss_bbox']
+        loss_bbox += losses.get('loss_bbox', 0)
         loss_giou += losses.get('loss_giou', 0)
         if 'proj_tokens' in end_points:
-            loss_sem_align += losses['loss_sem_align']
+            loss_sem_align += losses.get('loss_sem_align', 0)
         loss_rejection += losses.get('loss_rejection', 0)
 
+    # Query points generation loss
     if 'seeds_obj_cls_logits' in end_points.keys():
-        query_points_generation_loss = compute_points_obj_cls_loss_hard_topk(
+        loss_query_points = compute_points_obj_cls_loss_hard_topk(
             end_points, query_points_obj_topk
         )
     else:
-        query_points_generation_loss = 0.0
+        loss_query_points = 0.0
 
-    # total loss
+    # 计算总loss
     weight = 1
     if end_points["language_dataset"][0] == "scanrefer":
         weight = 0.5
+    
     loss = (
-        8 * query_points_generation_loss
+        8 * loss_query_points
         + 1.0 / (num_decoder_layers + 1) * (
             weight * loss_ce
             + 10 * loss_bbox
             + 5 * loss_giou
             + weight * loss_sem_align
         )
-        + rejection_loss_weight * loss_rejection
+        + rejection_loss_weight * loss_rejection  # 添加rejection loss
     )
+    
+    # 记录所有loss组件
     end_points['loss_ce'] = loss_ce
     end_points['loss_bbox'] = loss_bbox
     end_points['loss_giou'] = loss_giou
-    end_points['query_points_generation_loss'] = query_points_generation_loss
+    end_points['loss_query_points'] = loss_query_points
     end_points['loss_sem_align'] = loss_sem_align
-    end_points['loss_rejection'] = loss_rejection
+    end_points['loss_rejection'] = loss_rejection  # 记录rejection loss
     end_points['loss'] = loss
+    
     return loss, end_points
 
 def loss_boxes(src_boxes, target_boxes):

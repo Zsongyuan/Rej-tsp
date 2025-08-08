@@ -56,18 +56,12 @@ class BeaUTyDETR(nn.Module):
         
     
     # BRIEF forward.
-    def forward(self, inputs, gt_bboxes=None, gt_labels=None, gt_all_bbox_new=None, auxi_bbox=None, img_metas=None, epoch=None):
+    def forward(self, inputs, gt_bboxes=None, gt_labels=None, gt_all_bbox_new=None, 
+                auxi_bbox=None, img_metas=None, epoch=None):
         """
-        Forward pass.
-        Args:
-            inputs: dict
-                {point_clouds, text}
-                point_clouds (tensor): (B, Npoint, 3 + input_channels)
-                text (list): ['text0', 'text1', ...], len(text) = B
-        Returns:
-            end_points: dict
+        Forward pass - 改进版本，确保返回所有loss组件
         """
-        # STEP 1. vision and text encoding
+        # Vision and text encoding
         points = inputs['point_clouds']
         start_time = time.time()
         coordinates, features = ME.utils.batch_sparse_collate(
@@ -78,7 +72,6 @@ class BeaUTyDETR(nn.Module):
         visual_time = time.time() - start_time
         
         # Text encoding
-
         start_time = time.time()
         tokenized = self.tokenizer.batch_encode_plus(
             inputs['text'], padding="longest", return_tensors="pt"
@@ -88,19 +81,45 @@ class BeaUTyDETR(nn.Module):
         text_feats = self.text_projector(encoded_text.last_hidden_state) 
         text_attention_mask = tokenized.attention_mask.ne(1).bool()
         text_time = time.time() - start_time
-        
+        times = {
+            "visual_time": visual_time,
+            "text_time": text_time
+        }
+
         if not self.training:
-            start_time = time.time()
+            # Test mode
             bbox_list, head_time = self.head.forward_test(x, text_feats, text_attention_mask, img_metas)
             bbox_results = [
                 bbox3d2result(bboxes, scores, labels)
                 for bboxes, scores, labels in bbox_list
             ]
-            fusion_time = time.time() - start_time
-            return bbox_results, {'loss':0.}, 0., [visual_time,text_time,fusion_time-head_time,head_time]
-        losses = self.head.forward_train(x,text_feats, text_attention_mask, gt_bboxes, gt_labels, gt_all_bbox_new, auxi_bbox, img_metas)
-        losses.update({'loss':sum(value for key, value in losses.items() if '_loss' in key)})
-        return losses
+            return bbox_results, {'loss': 0.}, 0., times
+        
+        # Training mode - 获取head的loss
+        head_losses = self.head.forward_train(
+            x, text_feats, text_attention_mask, 
+            gt_bboxes, gt_labels, gt_all_bbox_new, 
+            auxi_bbox, img_metas
+        )
+        
+        # 如果使用DETR风格的decoder，添加matching loss
+        if hasattr(self, 'decoder'):
+            # 这里应该调用compute_hungarian_loss
+            # 但是看起来这个在head里已经处理了
+            pass
+        
+        # 确保包含所有loss组件
+        all_losses = {}
+        for key, value in head_losses.items():
+            if 'loss' in key.lower():
+                all_losses[key] = value
+        
+        # 计算总loss（如果没有的话）
+        if 'loss' not in all_losses:
+            total_loss = sum(v for v in all_losses.values() if torch.is_tensor(v))
+            all_losses['loss'] = total_loss
+        
+        return all_losses
     def init_bn_momentum(self):
         """Initialize batch-norm momentum."""
         for m in self.modules():

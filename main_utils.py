@@ -186,11 +186,8 @@ def save_checkpoint(args, epoch, model, optimizer, scheduler, save_cur=False):
 
 
 class BaseTrainTester:
-    """Basic train/test class to be inherited."""
-
-    # logger.
     def __init__(self, args):
-        """Initialize."""
+        """Initialize with TensorBoard support"""
         name = args.log_dir.split('/')[-1] 
         
         # Create log dir
@@ -207,16 +204,29 @@ class BaseTrainTester:
             name=name
         )
 
-        # tensorboard
-        self.tensorboard = record_tensorboard.TensorBoard(args.log_dir, distributed_rank=dist.get_rank())
+        # Initialize TensorBoard
+        if dist.get_rank() == 0:
+            from torch.utils.tensorboard import SummaryWriter
+            self.tb_writer = SummaryWriter(args.log_dir)
+        else:
+            self.tb_writer = None
 
-        # Save config file and initialize tb writer
+        # Save config
         if dist.get_rank() == 0:
             path = os.path.join(args.log_dir, "config.json")
             with open(path, 'w') as f:
                 json.dump(vars(args), f, indent=2)
             self.logger.info("Full config saved to {}".format(path))
             self.logger.info(str(vars(args)))
+    
+    def log_losses(self, losses, step, prefix='train'):
+        """Log losses to TensorBoard"""
+        if self.tb_writer is not None:
+            for key, value in losses.items():
+                if 'loss' in key.lower():
+                    if hasattr(value, 'item'):
+                        value = value.item()
+                    self.tb_writer.add_scalar(f'{prefix}/{key}', value, step)
 
     @staticmethod
     def get_datasets(args):
@@ -447,12 +457,48 @@ class BaseTrainTester:
 
     @staticmethod
     def _get_inputs(batch_data):
-        return {
+        """获取模型输入数据"""
+        inputs = {
             'point_clouds': batch_data['point_clouds'].float(),
             'text': batch_data['utterances'],
-            'target_cat': batch_data['target_cat']
         }
         
+        # 添加可选字段
+        if 'target_cat' in batch_data:
+            inputs['target_cat'] = batch_data['target_cat']
+        
+        if 'is_negative' in batch_data:
+            inputs['is_negative'] = batch_data['is_negative']
+        
+        return inputs
+        
+    def format_loss_log(losses_dict, prefix=""):
+        """
+        格式化loss字典为可读的字符串
+        Args:
+            losses_dict: 包含各种loss的字典
+            prefix: 输出前缀
+        Returns:
+            格式化的字符串
+        """
+        loss_items = []
+        
+        # 首先添加总loss
+        if 'loss' in losses_dict:
+            loss_items.append(f"Total: {losses_dict['loss']:.4f}")
+        
+        # 然后添加各个组件loss
+        for key in sorted(losses_dict.keys()):
+            if key != 'loss' and 'loss' in key.lower():
+                value = losses_dict[key]
+                if hasattr(value, 'item'):
+                    value = value.item()
+                
+                # 简化名称
+                name = key.replace('_loss', '').replace('loss_', '').capitalize()
+                loss_items.append(f"{name}: {value:.4f}")
+        
+        return f"{prefix}{' | '.join(loss_items)}"
     @staticmethod
     def _get_inputs_contra(batch_data):
         gt_labels = batch_data['sem_cls_label']
@@ -506,82 +552,151 @@ class BaseTrainTester:
 
 
     # BRIEF Training
-    def train_one_epoch(self, epoch, train_loader, model,
-                        criterion, set_criterion,
-                        optimizer, scheduler, args):
-        """
-        Run a single epoch.
-
-        Some of the args:
-            model: a nn.Module that returns end_points (dict)
-            criterion: a function that returns (loss, end_points)
-        """
-        stat_dict = {}  # collect statistics
-        model.train()  # set model to training mode
-
-        # Loop over batches
-        train_loader = tqdm(train_loader, desc=f"Epoch {epoch} Training")
+    def train_one_epoch_complete(self, epoch, train_loader, model,
+                                criterion, set_criterion,
+                                optimizer, scheduler, args):
+        """完整的训练函数，显示所有loss组件"""
+        model.train()
+        
+        # 初始化所有loss的meter
+        meters = {
+            'total': AverageMeter(),
+            'bbox': AverageMeter(),
+            'cls': AverageMeter(),
+            'keep': AverageMeter(),
+            'com': AverageMeter(),
+            'ce': AverageMeter(),
+            'giou': AverageMeter(),
+            'sem_align': AverageMeter(),
+            'rejection': AverageMeter(),  # 添加rejection loss meter
+            'query_points': AverageMeter(),
+        }
+        
+        train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")
+        
         for batch_idx, batch_data in enumerate(train_loader):
-            # 从 batch_data 中获取 GT 信息
-            # 注意: get_gt 函数需要您根据您的项目结构来定义或确认其存在
+            # 准备数据
             gt_bboxes_3d, gt_labels_3d, gt_all_bbox_new, auxi_bbox, img_metas = get_gt(batch_data)
-            
-            # Move to GPU
             batch_data = self._to_gpu(batch_data)
-            
-            # get the input data: pointcloud and text
             inputs = self._get_inputs(batch_data)
             
             # Forward pass
-            losses = model(inputs, gt_bboxes_3d, gt_labels_3d, gt_all_bbox_new, auxi_bbox, img_metas, epoch)
-            loss = losses['loss']
-
+            losses = model(inputs, gt_bboxes_3d, gt_labels_3d, 
+                        gt_all_bbox_new, auxi_bbox, img_metas, epoch)
+            
+            # 获取总loss用于backward
+            total_loss = losses.get('loss')
+            if total_loss is None:
+                # 如果没有总loss，计算所有loss的和
+                total_loss = sum(v for k, v in losses.items() 
+                            if 'loss' in k and torch.is_tensor(v))
+                losses['loss'] = total_loss
+            
             # Backward pass
             optimizer.zero_grad()
-            loss.backward()
-
+            total_loss.backward()
+            
+            # 梯度裁剪
+            grad_norm = 0
             if args.clip_norm > 0:
-                grad_total_norm = torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(), args.clip_norm
                 )
-                # 将梯度范数存入losses字典，以便_accumulate_stats可以处理它
-                losses['grad_norm'] = grad_total_norm
             
             optimizer.step()
             scheduler.step()
-
-            # Accumulate statistics
-            # _accumulate_stats 会遍历losses字典并累加到stat_dict中
-            stat_dict = self._accumulate_stats(stat_dict, losses)
-
-            # Print loss
+            
+            # 更新meters
+            batch_size = len(batch_data['scan_ids'])
+            meters['total'].update(total_loss.item(), batch_size)
+            
+            # 更新各个loss组件的meter
+            loss_mapping = {
+                'bbox_loss': 'bbox',
+                'cls_loss': 'cls',
+                'keep_loss': 'keep',
+                'com_loss': 'com',
+                'loss_ce': 'ce',
+                'loss_giou': 'giou',
+                'loss_sem_align': 'sem_align',
+                'loss_rejection': 'rejection',  # 添加rejection loss
+                'rejection_loss': 'rejection',  # 两种可能的命名
+                'loss_query_points': 'query_points',
+                'query_points_generation_loss': 'query_points',
+            }
+            
+            for loss_key, meter_key in loss_mapping.items():
+                if loss_key in losses:
+                    value = losses[loss_key]
+                    if torch.is_tensor(value):
+                        value = value.item()
+                    meters[meter_key].update(value, batch_size)
+            
+            # 更新进度条显示
+            postfix = {
+                'Loss': f'{meters["total"].avg:.4f}',
+                'BBox': f'{meters["bbox"].avg:.4f}',
+                'Cls': f'{meters["cls"].avg:.4f}',
+                'Rej': f'{meters["rejection"].avg:.4f}',  # 显示rejection loss
+                'LR': f'{optimizer.param_groups[0]["lr"]:.6f}'
+            }
+            train_loader.set_postfix(postfix)
+            
+            # 定期详细日志
             if (batch_idx + 1) % args.print_freq == 0:
-                # --- 从这里开始是修改后的日志打印逻辑 ---
+                log_msg = (
+                    f'Train [{epoch}][{batch_idx+1}/{len(train_loader)}]: '
+                    f'Loss {meters["total"].avg:.4f} '
+                    f'(BBox: {meters["bbox"].avg:.4f}, '
+                    f'Cls: {meters["cls"].avg:.4f}, '
+                    f'Keep: {meters["keep"].avg:.4f}, '
+                    f'Com: {meters["com"].avg:.4f}, '
+                    f'CE: {meters["ce"].avg:.4f}, '
+                    f'GIoU: {meters["giou"].avg:.4f}, '
+                    f'Sem: {meters["sem_align"].avg:.4f}, '
+                    f'Rej: {meters["rejection"].avg:.4f}, '  # 添加rejection loss
+                    f'QP: {meters["query_points"].avg:.4f}) '
+                    f'LR: {optimizer.param_groups[0]["lr"]:.6f} '
+                    f'Grad: {grad_norm:.4f}'
+                )
+                self.logger.info(log_msg)
                 
-                # 准备日志字符串
-                log_message = f'Train: [{epoch}][{batch_idx + 1}/{len(train_loader)}] | '
-                
-                # 提取所有损失相关的键并排序
-                loss_keys = sorted([key for key in stat_dict.keys() if 'loss' in key])
-                
-                # 获取总损失的平均值
-                avg_total_loss = stat_dict['loss'] / (batch_idx + 1)
-                log_message += f'Total Loss: {avg_total_loss:.4f} | '
-                
-                # 拼接其他损失分量的平均值
-                other_losses_msg = []
-                for key in loss_keys:
-                    if key != 'loss': # 避免重复打印总损失
-                        avg_loss = stat_dict[key] / (batch_idx + 1)
-                        # 简化键名以便打印 (e.g., 'loss_bbox' -> 'BBox')
-                        simple_key = key.replace('loss_', '').capitalize()
-                        other_losses_msg.append(f'{simple_key}: {avg_loss:.4f}')
-                
-                log_message += ' | '.join(other_losses_msg)
-                
-                # 打印最终格式化的日志
-                self.logger.info(log_message)
-                # --- 日志打印逻辑修改结束 ---
+                # TensorBoard logging
+                if self.tb_writer is not None:
+                    global_step = epoch * len(train_loader) + batch_idx
+                    for name, meter in meters.items():
+                        self.tb_writer.add_scalar(
+                            f'train/{name}_loss', meter.avg, global_step
+                        )
+                    self.tb_writer.add_scalar(
+                        'train/grad_norm', grad_norm, global_step
+                    )
+                    self.tb_writer.add_scalar(
+                        'train/learning_rate', 
+                        optimizer.param_groups[0]["lr"], 
+                        global_step
+                    )
+        
+        # Epoch结束总结
+        summary = (
+            f'\nEpoch {epoch} Training Summary:\n'
+            f'  Total Loss: {meters["total"].avg:.4f}\n'
+            f'  Detection Losses:\n'
+            f'    - BBox Loss: {meters["bbox"].avg:.4f}\n'
+            f'    - Class Loss: {meters["cls"].avg:.4f}\n'
+            f'    - GIoU Loss: {meters["giou"].avg:.4f}\n'
+            f'  Grounding Losses:\n'
+            f'    - CE Loss: {meters["ce"].avg:.4f}\n'
+            f'    - Semantic Align: {meters["sem_align"].avg:.4f}\n'
+            f'    - Rejection Loss: {meters["rejection"].avg:.4f}\n'  # 添加rejection loss
+            f'  Auxiliary Losses:\n'
+            f'    - Keep Loss: {meters["keep"].avg:.4f}\n'
+            f'    - Com Loss: {meters["com"].avg:.4f}\n'
+            f'    - Query Points: {meters["query_points"].avg:.4f}\n'
+        )
+        self.logger.info(summary)
+        
+        return meters
 
     # BRIEF eval 
     @torch.no_grad()
@@ -632,3 +747,70 @@ class BaseTrainTester:
             criterion: a function that returns (loss, end_points)
         """
         return None
+    
+class AverageMeter:
+    """计算并存储平均值和当前值"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+class RejectionMonitor:
+    """监控rejection机制的训练效果"""
+    def __init__(self):
+        self.reset()
+    
+    def reset(self):
+        self.pos_losses = []
+        self.neg_losses = []
+        self.pos_confidences = []
+        self.neg_confidences = []
+    
+    def update(self, losses, is_negative, predictions):
+        """更新统计"""
+        if is_negative:
+            self.neg_losses.append(losses['loss_rejection'].item())
+            # 记录负样本的最高置信度
+            max_conf = torch.max(torch.sigmoid(predictions)).item()
+            self.neg_confidences.append(max_conf)
+        else:
+            self.pos_losses.append(losses.get('loss_bbox', 0).item())
+            # 记录正样本的最高置信度
+            max_conf = torch.max(torch.sigmoid(predictions)).item()
+            self.pos_confidences.append(max_conf)
+    
+    def get_stats(self):
+        """获取统计信息"""
+        stats = {
+            'avg_pos_conf': np.mean(self.pos_confidences) if self.pos_confidences else 0,
+            'avg_neg_conf': np.mean(self.neg_confidences) if self.neg_confidences else 0,
+            'avg_pos_loss': np.mean(self.pos_losses) if self.pos_losses else 0,
+            'avg_neg_loss': np.mean(self.neg_losses) if self.neg_losses else 0,
+            'num_pos': len(self.pos_losses),
+            'num_neg': len(self.neg_losses),
+        }
+        return stats
+    
+    def log_stats(self, logger, epoch):
+        """记录统计信息"""
+        stats = self.get_stats()
+        logger.info(
+            f'Rejection Stats - Epoch {epoch}:\n'
+            f'  Positive Samples: {stats["num_pos"]}\n'
+            f'    - Avg Confidence: {stats["avg_pos_conf"]:.4f}\n'
+            f'    - Avg Loss: {stats["avg_pos_loss"]:.4f}\n'
+            f'  Negative Samples: {stats["num_neg"]}\n'
+            f'    - Avg Confidence: {stats["avg_neg_conf"]:.4f}\n'
+            f'    - Avg Rejection Loss: {stats["avg_neg_loss"]:.4f}\n'
+            f'  Confidence Gap: {stats["avg_pos_conf"] - stats["avg_neg_conf"]:.4f}'
+        )

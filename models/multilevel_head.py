@@ -619,10 +619,13 @@ class TSPHead(nn.Module):
 
 
     def _loss(self, bbox_preds, cls_preds, points, gt_bboxes, gt_labels, img_metas, 
-              keep_preds, keep_gts, bboxes_level, com_pred_training, com_coords_training):
+            keep_preds, keep_gts, bboxes_level, com_pred_training, com_coords_training):
+        """
+        改进的loss计算函数
+        """
         bbox_losses, cls_losses, pos_masks, com_losses, pos_masks_com = [], [], [], [], []
 
-        #keep loss
+        # Keep loss calculation
         keep_losses = 0
         for i in range(len(img_metas)):
             k_loss = 0
@@ -641,16 +644,18 @@ class TSPHead(nn.Module):
 
             keep_losses = keep_losses + k_loss
 
+        # Per-image loss calculation
         for i in range(len(img_metas)):
-            bbox_loss, cls_loss, pos_mask, com_loss,pos_mask_com = self._loss_single(
+            bbox_loss, cls_loss, pos_mask, com_loss, pos_mask_com = self._loss_single(
                 bbox_preds=[x[i] for x in bbox_preds],
                 cls_preds=[x[i] for x in cls_preds],
                 points=[x[i] for x in points],
                 img_meta=img_metas[i],
                 gt_bboxes=gt_bboxes[i],
                 gt_labels=gt_labels[i],
-                com_pred = com_pred_training[i],
-                com_coords = com_coords_training[i])
+                com_pred=com_pred_training[i],
+                com_coords=com_coords_training[i])
+            
             if bbox_loss is not None:
                 bbox_losses.append(bbox_loss)
             cls_losses.append(cls_loss)
@@ -658,42 +663,95 @@ class TSPHead(nn.Module):
             pos_masks.append(pos_mask)
             pos_masks_com.append(pos_mask_com)
 
+        # 计算最终loss，确保不会出现nan
         if bbox_losses:
             final_bbox_loss = self.bbox_loss_weight * torch.mean(torch.cat(bbox_losses))
         else:
-            # 如果为空, 创建一个需要梯度的零张量作为损失
             final_bbox_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
 
-        # 检查pos_masks的总和以避免除零
         total_pos = torch.sum(torch.cat(pos_masks))
         if total_pos > 0:
             final_cls_loss = torch.sum(torch.cat(cls_losses)) / total_pos
         else:
             final_cls_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
-            
-        # 检查pos_masks_com的总和以避免除零
+        
         total_pos_com = torch.sum(torch.cat(pos_masks_com))
         if total_pos_com > 0:
             final_com_loss = torch.sum(torch.cat(com_losses)) / total_pos_com
         else:
             final_com_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
 
+        # 返回所有loss组件
+        loss_dict = {
+            'bbox_loss': final_bbox_loss,
+            'cls_loss': final_cls_loss,
+            'keep_loss': self.keep_loss_weight * keep_losses / len(img_metas),
+            'com_loss': final_com_loss,
+        }
+        
+        # 添加统计信息（可选）
+        loss_dict['num_pos'] = total_pos.item() if hasattr(total_pos, 'item') else total_pos
+        loss_dict['num_pos_com'] = total_pos_com.item() if hasattr(total_pos_com, 'item') else total_pos_com
+        
+        return loss_dict
 
-        return dict(
-            bbox_loss=final_bbox_loss,
-            cls_loss=final_cls_loss,
-            keep_loss=self.keep_loss_weight * keep_losses / len(img_metas),
-            com_loss=final_com_loss
+    def forward_train(self, x, text_feats, text_attention_mask, gt_bboxes, 
+                     gt_labels, gt_all_bbox_new, auxi_bbox, img_metas, pc=None):
+        """Forward training with rejection loss support"""
+        # 执行forward获取预测
+        bbox_preds, cls_preds, points, keep_preds, keep_gts, bboxes_level, \
+        com_pred_training, com_coords_training = self(
+            x, text_feats, text_attention_mask, gt_bboxes, gt_labels, 
+            gt_all_bbox_new, auxi_bbox, img_metas, pc
         )
-
-
-    def forward_train(self, x, text_feats, text_attention_mask, gt_bboxes, gt_labels, gt_all_bbox_new, auxi_bbox, img_metas,pc=None):
-        bbox_preds, cls_preds, points, keep_preds, keep_gts, bboxes_level, com_pred_training, com_coords_training = \
-            self(x, text_feats, text_attention_mask, gt_bboxes, gt_labels, gt_all_bbox_new, auxi_bbox, img_metas,pc)
-
-        return self._loss(bbox_preds, cls_preds, points,
-                          gt_bboxes, gt_labels, img_metas, keep_preds, keep_gts, bboxes_level,
-                          com_pred_training, com_coords_training)
+        
+        # 计算所有loss
+        losses = self._loss(
+            bbox_preds, cls_preds, points,
+            gt_bboxes, gt_labels, img_metas, 
+            keep_preds, keep_gts, bboxes_level,
+            com_pred_training, com_coords_training
+        )
+        
+        # 检查是否有负样本需要计算rejection loss
+        has_negative = any(meta.get('is_negative', False) for meta in img_metas)
+        if has_negative:
+            # 计算rejection loss
+            rejection_loss = self._compute_rejection_loss(
+                cls_preds, img_metas
+            )
+            losses['rejection_loss'] = rejection_loss
+        else:
+            losses['rejection_loss'] = torch.tensor(0.0, device=x.device)
+        
+        return losses
+    
+    def _compute_rejection_loss(self, cls_preds, img_metas):
+        """计算拒绝损失"""
+        rejection_losses = []
+        
+        for i, meta in enumerate(img_metas):
+            if meta.get('is_negative', False):
+                # 对于负样本，所有预测的置信度都应该很低
+                preds = torch.cat([p[i] for p in cls_preds])
+                
+                # 使用sigmoid获取置信度
+                confidences = torch.sigmoid(preds)
+                
+                # 找到最高置信度
+                max_conf = torch.max(confidences)
+                
+                # 目标是让最高置信度也接近0
+                loss = F.binary_cross_entropy(
+                    max_conf, 
+                    torch.tensor(0.0, device=max_conf.device)
+                )
+                rejection_losses.append(loss)
+        
+        if rejection_losses:
+            return torch.mean(torch.stack(rejection_losses))
+        else:
+            return torch.tensor(0.0, device=cls_preds[0][0].device)
 
 
     def _nms(self, bboxes, scores, img_meta):
