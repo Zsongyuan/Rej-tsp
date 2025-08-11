@@ -13,6 +13,7 @@ import json
 import multiprocessing as mp
 import os
 import random
+import pickle
 from six.moves import cPickle
 
 import numpy as np
@@ -224,8 +225,11 @@ class Joint3DDataset(Dataset):
                 str(line[headers['mentions_target_class']]).lower() == 'true'
             ]
 
-            # text decoupling
-            Scene_graph_parse(annos)
+            # text decoupling with caching
+            cache_dir = os.path.join(self.data_path, 'scene_graph_cache')
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_file = os.path.join(cache_dir, f"{dset.replace('+','plus')}_{self.split}.pkl")
+            Scene_graph_parse(annos, cache_file)
 
         return annos
 
@@ -261,7 +265,10 @@ class Joint3DDataset(Dataset):
                 )
             ]
         
-        Scene_graph_parse(annos)
+        cache_dir = os.path.join(self.data_path, 'scene_graph_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, f"nr3d_{self.split}.pkl")
+        Scene_graph_parse(annos, cache_file)
 
         # Add distractor info
         for anno in annos:
@@ -339,7 +346,10 @@ class Joint3DDataset(Dataset):
         ###########################
         # STEP 2. text decoupling #
         ###########################
-        Scene_graph_parse(annos)
+        cache_dir = os.path.join(self.data_path, 'scene_graph_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, f"scanrefer_{self.split}.pkl")
+        Scene_graph_parse(annos, cache_file)
 
         # # NOTE BUTD-DETR unreasonable approach, add GT object name
         # num = 0
@@ -485,7 +495,10 @@ class Joint3DDataset(Dataset):
         ###########################
         # STEP 2. text decoupling #
         ###########################
-        Scene_graph_parse(annos)
+        cache_dir = os.path.join(self.data_path, 'scene_graph_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, f"vigil3d_{self.split}.pkl")
+        Scene_graph_parse(annos, cache_file)
 
         # STEP 3. Add distractor info
         scene2obj = defaultdict(list)
@@ -1487,8 +1500,19 @@ def unpickle_data(file_name, python2_to_3=False):
 #########################
 # BRIEF Text decoupling #
 #########################
-def Scene_graph_parse(annos):
+def Scene_graph_parse(annos, cache_path=None):
     # print('Begin text decoupling......')
+    if cache_path and os.path.exists(cache_path):
+        with open(cache_path, 'rb') as f:
+            cached = pickle.load(f)
+        for anno, item in zip(annos, cached):
+            anno['utterance'] = item['utterance']
+            anno['graph_node'] = item['graph_node']
+            anno['graph_edge'] = item['graph_edge']
+            anno['auxi_entity'] = item.get('auxi_entity')
+        return
+
+    cache_data = []
     for anno in annos:
         caption = ' '.join(anno['utterance'].replace(',', ' , ').split())
         # print(f"Processing caption: {caption} for scan_id: {anno['scan_id']}")
@@ -1607,5 +1631,16 @@ def Scene_graph_parse(annos):
                 auxi_entity = node
                 break
         anno["auxi_entity"] = auxi_entity
-    
+        cache_data.append({
+            'utterance': caption,
+            'graph_node': graph_node,
+            'graph_edge': graph_edge,
+            'auxi_entity': auxi_entity
+        })
+
+    if cache_path:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, 'wb') as f:
+            pickle.dump(cache_data, f)
+
     # print('End text decoupling!')

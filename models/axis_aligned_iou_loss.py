@@ -44,14 +44,14 @@ def axis_aligned_bbox_overlaps_3d(bboxes1,
         >>> ])
         >>> overlaps = axis_aligned_bbox_overlaps_3d(bboxes1, bboxes2)
         >>> assert overlaps.shape == (3, 3)
-        >>> overlaps = bbox_overlaps(bboxes1, bboxes2, is_aligned=True)
+        >>> overlaps = axis_aligned_bbox_overlaps_3d(bboxes1, bboxes2, is_aligned=True)
         >>> assert overlaps.shape == (3, )
     Example:
         >>> empty = torch.empty(0, 6)
         >>> nonempty = torch.FloatTensor([[0, 0, 0, 10, 9, 10]])
-        >>> assert tuple(bbox_overlaps(empty, nonempty).shape) == (0, 1)
-        >>> assert tuple(bbox_overlaps(nonempty, empty).shape) == (1, 0)
-        >>> assert tuple(bbox_overlaps(empty, empty).shape) == (0, 0)
+        >>> assert tuple(axis_aligned_bbox_overlaps_3d(empty, nonempty).shape) == (0, 1)
+        >>> assert tuple(axis_aligned_bbox_overlaps_3d(nonempty, empty).shape) == (1, 0)
+        >>> assert tuple(axis_aligned_bbox_overlaps_3d(empty, empty).shape) == (0, 0)
     """
 
     assert mode in ['iou', 'giou'], f'Unsupported mode {mode}'

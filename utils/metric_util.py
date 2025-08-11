@@ -91,7 +91,7 @@ def single_scene_precision_recall(labels, pred, iou_thresh, conf_thresh):
 
 def precision_recall(TP, FP, FN):
     Prec = 1.0 * TP / (TP + FP) if TP + FP > 0 else 0
-    Rec = 1.0 * TP / (TP + FN)
+    Rec = 1.0 * TP / (TP + FN) if TP + FN > 0 else 0
     return Prec, Rec
 
 
