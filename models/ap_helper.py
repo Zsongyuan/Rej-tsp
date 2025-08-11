@@ -217,16 +217,20 @@ def parse_predictions(end_points, config_dict, prefix="", size_cls_agnostic=Fals
         if config_dict['per_class_proposal']:
             cur_list = []
             for ii in range(config_dict['dataset_config'].num_class):
-                # if config_dict.get('hungarian_loss', False) and ii == config_dict['dataset_config'].num_class - 1:
-                #    continue
-                try:
-                    cur_list += [
-                        (ii, pred_corners_3d_upright_camera[i, j], sem_cls_probs[i, j, ii] * obj_prob[i, j])
-                        for j in range(pred_center.shape[1])
-                        if pred_mask[i, j] == 1 and obj_prob[i, j] > config_dict['conf_thresh']
-                    ]
-                except:
-                    st()
+                # Guard against class index overflow instead of entering a debugger
+                cur_list += [
+                    (
+                        ii,
+                        pred_corners_3d_upright_camera[i, j],
+                        sem_cls_probs[i, j, ii] * obj_prob[i, j]
+                    )
+                    for j in range(pred_center.shape[1])
+                    if (
+                        pred_mask[i, j] == 1
+                        and obj_prob[i, j] > config_dict['conf_thresh']
+                        and ii < sem_cls_probs.shape[2]
+                    )
+                ]
             batch_pred_map_cls.append(cur_list)
         else:
             batch_pred_map_cls.append([(pred_sem_cls[i, j].item(), pred_corners_3d_upright_camera[i, j], obj_prob[i, j]) \
