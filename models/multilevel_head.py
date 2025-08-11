@@ -5,6 +5,7 @@ import MinkowskiEngine as ME
 import torch,time
 from mmcv.ops import nms3d, nms3d_normal
 from torch import nn
+import torch.nn.functional as F
 
 from mmdet3d.structures.bbox_3d import rotation_3d_in_axis
 from .axis_aligned_iou_loss import AxisAlignedIoULoss2
