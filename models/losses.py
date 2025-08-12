@@ -56,6 +56,19 @@ def _intersect_par(box_a, box_b):
 
 
 def _iou3d_par(box_a, box_b):
+    """Calculate pairwise IoU for axis-aligned 3D boxes.
+
+    The inputs may occasionally be passed in unexpected shapes (e.g. ``(6, 1)``)
+    depending on how they are generated.  To make the function robust, first
+    reshape the boxes to ``(N, 6)`` where each box is represented by
+    ``(x0, y0, z0, x1, y1, z1)``.  This guards against indexing errors when a
+    singleton dimension is present.
+    """
+
+    # Ensure boxes are of shape (N, 6)
+    box_a = box_a.reshape(-1, 6)
+    box_b = box_b.reshape(-1, 6)
+
     intersection = _intersect_par(box_a, box_b)
     vol_a = _volume_par(box_a)
     vol_b = _volume_par(box_b)
