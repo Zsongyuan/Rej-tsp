@@ -475,6 +475,11 @@ class BaseTrainTester:
             'point_clouds': batch_data['point_clouds'].float(),
             'text': batch_data['utterances'],
         }
+
+        # Record per-scene offset so predictions can be restored
+        offset = batch_data['point_clouds'][:, :, :3].min(dim=1)[0]
+        inputs['scene_offset'] = offset
+        batch_data['scene_offset'] = offset
         
         # 添加可选字段
         if 'target_cat' in batch_data:

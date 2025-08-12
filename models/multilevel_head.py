@@ -12,7 +12,6 @@ from .axis_aligned_iou_loss import AxisAlignedIoULoss2
 from mmdet.models.losses import FocalLoss
 from .trans_modules import (BiEncoder, BiEncoderLayer, PositionEmbeddingLearned)
 
-import pdb
 import logging
 
 class MinkowskiFeatureFusionBlock(nn.Module):
@@ -379,8 +378,8 @@ class TSPHead(nn.Module):
                 try:
                     for permutation in x.decomposition_permutations:
                         keeps.append(keep_pred[permutation])
-                except:
-                    pdb.set_trace()
+                except Exception as e:
+                    raise RuntimeError("failed to collect keep predictions") from e
                 keep_preds.append(keeps)
                 
             x = self.__getattr__(f'lateral_block_{i}')(x)
@@ -413,9 +412,6 @@ class TSPHead(nn.Module):
                 prune_mask[permutation[mask]] = True                 
         if prune_mask.sum() != 0:
             x = self.pruning(x, prune_mask)
-        else:
-            x = None
-
         return x
 
 
@@ -856,33 +852,31 @@ class TSPHead(nn.Module):
         
         for i in range(len(inputs) - 1, -1, -1):
             if i ==1:
-                x = self._prune_inference(x, prune_inference,i)
-                
-                if x != None:
-                    x = self.__getattr__(f'up_block_{i + 1}')(x)
-                    coords = x.coordinates.float()
-                    x_level_features = inputs[i].features_at_coordinates(coords)
-                    x_level = ME.SparseTensor(features=x_level_features,
-                                              coordinate_map_key=x.coordinate_map_key,
-                                              coordinate_manager=x.coordinate_manager)
-                    x = x + x_level
-                else:
-                    pdb.set_trace()
-                    break
+                x = self._prune_inference(x, prune_inference, i)
+                if x is None:
+                    raise RuntimeError("no points left after pruning at layer 1")
+                x = self.__getattr__(f'up_block_{i + 1}')(x)
+                coords = x.coordinates.float()
+                x_level_features = inputs[i].features_at_coordinates(coords)
+                x_level = ME.SparseTensor(
+                    features=x_level_features,
+                    coordinate_map_key=x.coordinate_map_key,
+                    coordinate_manager=x.coordinate_manager,
+                )
+                x = x + x_level
             elif i ==0:
-                x = self._prune_inference(x, prune_inference,i)
-                
-                if x != None:
-                    x = self.__getattr__(f'up_block_{i + 1}')(x)
-                    coords = x.coordinates.float()
-                    x_level_features = inputs[i].features_at_coordinates(coords)
-                    x_level = ME.SparseTensor(features=x_level_features,
-                                              coordinate_map_key=x.coordinate_map_key,
-                                              coordinate_manager=x.coordinate_manager)
-                    x_ori = x + x_level
-                else:
-                    pdb.set_trace()
-                    break
+                x = self._prune_inference(x, prune_inference, i)
+                if x is None:
+                    raise RuntimeError("no points left after pruning at layer 0")
+                x = self.__getattr__(f'up_block_{i + 1}')(x)
+                coords = x.coordinates.float()
+                x_level_features = inputs[i].features_at_coordinates(coords)
+                x_level = ME.SparseTensor(
+                    features=x_level_features,
+                    coordinate_map_key=x.coordinate_map_key,
+                    coordinate_manager=x.coordinate_manager,
+                )
+                x_ori = x + x_level
         
                 sampled_coords,sampled_features, original_indices = [],[],[]
                 

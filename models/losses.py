@@ -42,6 +42,16 @@ def _volume_par(box):
 
 
 def _intersect_par(box_a, box_b):
+    """Pairwise intersection volume for axis-aligned boxes.
+
+    Some callers may occasionally supply inputs with an extra singleton
+    dimension (e.g. ``(6, 1)`` or ``(1, 6)``).  Reshape the inputs to
+    ``(N, 6)`` to avoid indexing errors when computing the intersection.
+    """
+
+    box_a = box_a.reshape(-1, 6)
+    box_b = box_b.reshape(-1, 6)
+
     xA = torch.max(box_a[:, 0][:, None], box_b[:, 0][None, :])
     yA = torch.max(box_a[:, 1][:, None], box_b[:, 1][None, :])
     zA = torch.max(box_a[:, 2][:, None], box_b[:, 2][None, :])

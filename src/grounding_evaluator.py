@@ -57,10 +57,9 @@ class GroundingEvaluator:
             prefixes (list): names of layers to evaluate
             filter_non_gt_boxes (bool): whether to filter predictions
                 that do not correspond to GT boxes
-            voxel_size (float): optional scaling factor to recover
-                original coordinates from voxel coordinates. If the
-                predictions are already in the global coordinate frame
-                this should be ``1.0``.
+            voxel_size (float): Deprecated. Predictions are assumed to be
+                in world coordinates; the argument is ignored but kept for
+                backward compatibility.
         """
         self.only_root = only_root
         self.thresholds = thresholds
@@ -96,14 +95,6 @@ class GroundingEvaluator:
         """Restore predicted boxes to world coordinates."""
         device = boxes.device
         center, dims = boxes[..., :3], boxes[..., 3:]
-
-        vs = self.voxel_size
-        if isinstance(vs, (list, tuple)):
-            vs = torch.tensor(vs, device=device, dtype=torch.float32)
-        else:
-            vs = torch.tensor([vs, vs, vs], device=device, dtype=torch.float32)
-        center = center * vs
-        dims = dims * vs
 
         perm = list(self.axis_perm)
         center = center[..., perm]
@@ -229,11 +220,11 @@ class GroundingEvaluator:
             gt_bboxes = self._prep_gt_boxes(
                 end_points['gt_bboxes_3d'][bid], end_points, bid
             )
-            scores = end_points['bbox_results'][bid]['scores_3d']
+            scores = end_points['bbox_results'][bid]['scores_3d'].reshape(-1)
             pred_boxes = torch.cat([
                 end_points['bbox_results'][bid]['bboxes_3d'].gravity_center,
                 end_points['bbox_results'][bid]['bboxes_3d'].dims,
-            ], dim=1)
+            ], dim=-1).reshape(-1, 6)
 
             num_boxes = scores.shape[0]
             if num_boxes >= max_k:
@@ -279,7 +270,7 @@ class GroundingEvaluator:
                 )
                 diff = pbox[:, :3] - gt_bboxes[:, :3].mean(0)
                 print(
-                    f"[DEBUG] Pred-GT center diff mean {diff.mean(0)} std {diff.std(0)}"
+                    f"[DEBUG] Pred-GT center diff mean {diff.mean(0)}"
                 )
                 self._debug_shown = True
 
@@ -653,13 +644,6 @@ class RejectionGroundingEvaluator:
     def _restore_pred_boxes(self, boxes, end_points, bid):
         device = boxes.device
         center, dims = boxes[:, :3], boxes[:, 3:]
-        vs = self.voxel_size
-        if isinstance(vs, (list, tuple)):
-            vs = torch.tensor(vs, device=device, dtype=torch.float32).view(1, 3)
-        else:
-            vs = torch.tensor([vs, vs, vs], device=device).view(1, 3)
-        center = center * vs
-        dims = dims * vs
         perm = list(self.axis_perm)
         center = center[:, perm]
         dims = dims[:, perm]
