@@ -161,17 +161,33 @@ class TrainTester(BaseTrainTester):
         if args.use_rejection and args.val_file_path:
             self.logger.info("Using RejectionGroundingEvaluator for comprehensive evaluation.")
             evaluator = RejectionGroundingEvaluator(
-                iou_thresh=0.5,  # 您可以将其改为args参数或保持固定
+                iou_thresh=0.5,
                 rejection_thresh=args.rejection_thresh,
-                voxel_size=args.voxel_size
+                voxel_size=args.voxel_size,
+                dim_is_radius=args.dim_is_radius,
+                axis_perm=tuple(args.axis_perm),
+                axis_sign=tuple(args.axis_sign),
+                use_scene_offset=args.use_scene_offset,
+                offset_keys=tuple(args.offset_keys),
+                gt_in_world=args.gt_in_world,
+                debug=args.debug,
             )
         else:
             self.logger.info("Using original GroundingEvaluator for localization accuracy only.")
             evaluator = GroundingEvaluator(
-                only_root=True, thresholds=[0.25, 0.5],
-                topks=[1], prefixes=['3dcnn'],
+                only_root=True,
+                thresholds=[0.25, 0.5],
+                topks=[1],
+                prefixes=['3dcnn'],
                 filter_non_gt_boxes=args.butd_cls,
-                voxel_size=args.voxel_size
+                voxel_size=args.voxel_size,
+                dim_is_radius=args.dim_is_radius,
+                axis_perm=tuple(args.axis_perm),
+                axis_sign=tuple(args.axis_sign),
+                use_scene_offset=args.use_scene_offset,
+                offset_keys=tuple(args.offset_keys),
+                gt_in_world=args.gt_in_world,
+                debug=args.debug,
             )
         # <<<<<<<<<<<<<<<<<<<<<<<< END: 修改代码 >>>>>>>>>>>>>>>>>>>>>>>>
 

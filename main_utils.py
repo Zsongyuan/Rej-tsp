@@ -42,6 +42,19 @@ def parse_option():
     parser.add_argument('--sampling', default='kps', type=str,
                         help='Query points sampling method (kps, fps)')
     parser.add_argument('--voxel_size', default=0.01, type=float)
+    parser.add_argument('--dim_is_radius', action='store_true',
+                        help='If model predicts half-dimensions (radius).')
+    parser.add_argument('--axis_perm', type=int, nargs=3, default=[0, 1, 2],
+                        help='Permutation of axes from local to world.')
+    parser.add_argument('--axis_sign', type=int, nargs=3, default=[1, 1, 1],
+                        help='Sign of each axis when mapping to world.')
+    parser.add_argument('--use_scene_offset', action='store_true',
+                        help='Apply per-scene offset to predictions.')
+    parser.add_argument('--offset_keys', type=str, nargs='+',
+                        default=['scene_offset', 'origin', 'pc_min', 'shift', 'scene_shift'],
+                        help='Keys to search for scene offset in end_points.')
+    parser.add_argument('--gt_in_world', action='store_true', default=True,
+                        help='Ground truth boxes already in world coordinates.')
 
     # Transformer
     parser.add_argument('--num_encoder_layers', default=3, type=int)

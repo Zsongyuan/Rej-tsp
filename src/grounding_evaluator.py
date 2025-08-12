@@ -31,9 +31,23 @@ class GroundingEvaluator:
         prefixes (list): names of layers to evaluate
     """
 
-    def __init__(self, only_root=True, thresholds=[0.25, 0.5],
-                 topks=[1, 5, 10], prefixes=[], filter_non_gt_boxes=False,
-                 voxel_size=1.0):
+    def __init__(
+        self,
+        only_root=True,
+        thresholds=[0.25, 0.5],
+        topks=[1, 5, 10],
+        prefixes=[],
+        filter_non_gt_boxes=False,
+        voxel_size=1.0,
+        dim_is_radius=False,
+        axis_perm=(0, 1, 2),
+        axis_sign=(1, 1, 1),
+        use_scene_offset=False,
+        offset_keys=("scene_offset", "origin", "pc_min", "shift", "scene_shift"),
+        gt_in_world=True,
+        debug=False,
+    ):
+        """Initialize accumulators and configuration parameters."""
         """Initialize accumulators.
 
         Args:
@@ -54,7 +68,65 @@ class GroundingEvaluator:
         self.prefixes = prefixes
         self.filter_non_gt_boxes = filter_non_gt_boxes
         self.voxel_size = voxel_size
+        self.dim_is_radius = dim_is_radius
+        self.axis_perm = axis_perm
+        self.axis_sign = axis_sign
+        self.use_scene_offset = use_scene_offset
+        self.offset_keys = offset_keys
+        self.gt_in_world = gt_in_world
+        self.debug = debug
+        self._debug_shown = False
         self.reset()
+
+    def _get_scene_offset(self, end_points, bid, device):
+        """Retrieve per-scene offset if provided in ``end_points``."""
+        for key in self.offset_keys:
+            if key in end_points:
+                off = end_points[key]
+                if isinstance(off, (list, tuple)):
+                    off = torch.tensor(off, device=device, dtype=torch.float32)
+                if isinstance(off, torch.Tensor):
+                    if off.ndim == 2:
+                        return off[bid].to(device)
+                    if off.ndim == 1:
+                        return off.to(device)
+        return torch.zeros(3, device=device)
+
+    def _restore_pred_boxes(self, boxes, end_points, bid):
+        """Restore predicted boxes to world coordinates."""
+        device = boxes.device
+        center, dims = boxes[..., :3], boxes[..., 3:]
+
+        vs = self.voxel_size
+        if isinstance(vs, (list, tuple)):
+            vs = torch.tensor(vs, device=device, dtype=torch.float32)
+        else:
+            vs = torch.tensor([vs, vs, vs], device=device, dtype=torch.float32)
+        center = center * vs
+        dims = dims * vs
+
+        perm = list(self.axis_perm)
+        center = center[..., perm]
+        dims = dims[..., perm]
+
+        sign = torch.tensor(self.axis_sign, device=device, dtype=torch.float32)
+        center = center * sign
+
+        if self.dim_is_radius:
+            dims = dims * 2
+
+        if self.use_scene_offset:
+            offset = self._get_scene_offset(end_points, bid, device)
+            center = center + offset
+
+        return torch.cat([center, dims], dim=-1)
+
+    def _prep_gt_boxes(self, gt_boxes, end_points=None, bid=None):
+        """Convert GT boxes to (cx,cy,cz,w,h,d)."""
+        boxes = torch.cat([gt_boxes.gravity_center, gt_boxes.dims], dim=1)
+        if not self.gt_in_world:
+            boxes = self._restore_pred_boxes(boxes, end_points, bid)
+        return boxes
 
     def reset(self):
         """Reset accumulators to empty."""
@@ -150,84 +222,114 @@ class GroundingEvaluator:
             end_points (dict): contains predictions and gt
             prefix (str): layer name
         """
+        max_k = max(self.topks)
 
         # Highest scoring box -> iou
         for bid in range(len(end_points['bbox_results'])):
-            def _prep_boxes(boxes):
-                center = boxes.gravity_center
-                dims = boxes.dims
-                if getattr(self, 'voxel_size', 1.0) != 1.0:
-                    center = center * self.voxel_size
-                    dims = dims * self.voxel_size
-                return torch.cat([center, dims], dim=1)
-
-            gt_bboxes = _prep_boxes(end_points['gt_bboxes_3d'][bid])
+            gt_bboxes = self._prep_gt_boxes(
+                end_points['gt_bboxes_3d'][bid], end_points, bid
+            )
             scores = end_points['bbox_results'][bid]['scores_3d']
-            bboxes = _prep_boxes(end_points['bbox_results'][bid]['bboxes_3d'])
+            pred_boxes = torch.cat([
+                end_points['bbox_results'][bid]['bboxes_3d'].gravity_center,
+                end_points['bbox_results'][bid]['bboxes_3d'].dims,
+            ], dim=1)
 
-            if scores.shape[0] > 4:
-                _, top = torch.topk(scores, 5)
-                pbox = bboxes[top]
-                top = top.reshape(1, -1)
-                gt_bboxes = _prep_boxes(end_points['gt_bboxes_3d'][bid])
+            num_boxes = scores.shape[0]
+            if num_boxes >= max_k:
+                top_idx = torch.topk(scores, max_k).indices
+                pbox = pred_boxes[top_idx]
             else:
-                padded_tensor = torch.zeros(5 - bboxes.shape[0], 6, device=bboxes.device)
-                pbox = torch.cat([bboxes, padded_tensor], dim=0)
+                pad = torch.zeros(max_k - num_boxes, 6, device=pred_boxes.device)
+                pbox = torch.cat([pred_boxes, pad], dim=0)
+
+            pbox = self._restore_pred_boxes(pbox, end_points, bid)
             # IoU
             ious, _ = _iou3d_par(
-                box_cxcyczwhd_to_xyzxyz(gt_bboxes),  # (obj, 6)
-                box_cxcyczwhd_to_xyzxyz(pbox).to(gt_bboxes.device)  # (obj*10, 6)
-            )  # (obj, obj*10)
-            ious = ious.reshape(1, 1, pbox.size(0))
-            ious = ious[torch.arange(len(ious)), torch.arange(len(ious))]
+                box_cxcyczwhd_to_xyzxyz(gt_bboxes),
+                box_cxcyczwhd_to_xyzxyz(pbox).to(gt_bboxes.device),
+            )
+
+            if self.debug and not self._debug_shown and bid == 0:
+                gt_iou, _ = _iou3d_par(
+                    box_cxcyczwhd_to_xyzxyz(gt_bboxes),
+                    box_cxcyczwhd_to_xyzxyz(gt_bboxes),
+                )
+                pred_iou, _ = _iou3d_par(
+                    box_cxcyczwhd_to_xyzxyz(pbox),
+                    box_cxcyczwhd_to_xyzxyz(pbox),
+                )
+                print(
+                    f"[DEBUG] IoU(gt,gt) mean={gt_iou.mean():.4f} max={gt_iou.max():.4f}"
+                )
+                print(
+                    f"[DEBUG] IoU(pred,pred) mean={pred_iou.mean():.4f} max={pred_iou.max():.4f}"
+                )
+                print(
+                    f"[DEBUG] GT center range {gt_bboxes[:, :3].min(0)[0]} to {gt_bboxes[:, :3].max(0)[0]}"
+                )
+                print(
+                    f"[DEBUG] Pred center range {pbox[:, :3].min(0)[0]} to {pbox[:, :3].max(0)[0]}"
+                )
+                print(
+                    f"[DEBUG] GT dims range {gt_bboxes[:, 3:].min(0)[0]} to {gt_bboxes[:, 3:].max(0)[0]}"
+                )
+                print(
+                    f"[DEBUG] Pred dims range {pbox[:, 3:].min(0)[0]} to {pbox[:, 3:].max(0)[0]}"
+                )
+                diff = pbox[:, :3] - gt_bboxes[:, :3].mean(0)
+                print(
+                    f"[DEBUG] Pred-GT center diff mean {diff.mean(0)} std {diff.std(0)}"
+                )
+                self._debug_shown = True
 
             # step Measure IoU>threshold, ious are (obj, 10)
             for t in self.thresholds:
                 thresholded = ious > t
                 for k in self.topks:
-                    found = thresholded[:, :k].any(1)
+                    found = thresholded[:, :k].any(dim=1)
                     self.dets[(prefix, t, k, 'bbf')] += found.sum().item()
-                    self.gts[(prefix, t, k, 'bbf')] += len(thresholded)
-                    if prefix == '3dcnn':
-                        found = found[0].item()
-                        if k == 1 and t == self.thresholds[0]:
+                    self.gts[(prefix, t, k, 'bbf')] += thresholded.size(0)
+                    if prefix == '3dcnn' and k == 1:
+                        hit = found[0].item()
+                        if t == self.thresholds[0]:
                             if end_points['is_view_dep'][bid]:
                                 self.gts['vd'] += 1
-                                self.dets['vd'] += found
+                                self.dets['vd'] += hit
                             else:
                                 self.gts['vid'] += 1
-                                self.dets['vid'] += found
+                                self.dets['vid'] += hit
                             if end_points['is_hard'][bid]:
                                 self.gts['hard'] += 1
-                                self.dets['hard'] += found
+                                self.dets['hard'] += hit
                             else:
                                 self.gts['easy'] += 1
-                                self.dets['easy'] += found
+                                self.dets['easy'] += hit
                             if end_points['is_unique'][bid]:
                                 self.gts['unique'] += 1
-                                self.dets['unique'] += found
+                                self.dets['unique'] += hit
                             else:
                                 self.gts['multi'] += 1
-                                self.dets['multi'] += found
-                        if k == 1 and t == self.thresholds[1]:
+                                self.dets['multi'] += hit
+                        if t == self.thresholds[1]:
                             if end_points['is_view_dep'][bid]:
                                 self.gts['vd50'] += 1
-                                self.dets['vd50'] += found
+                                self.dets['vd50'] += hit
                             else:
                                 self.gts['vid50'] += 1
-                                self.dets['vid50'] += found
+                                self.dets['vid50'] += hit
                             if end_points['is_hard'][bid]:
                                 self.gts['hard50'] += 1
-                                self.dets['hard50'] += found
+                                self.dets['hard50'] += hit
                             else:
                                 self.gts['easy50'] += 1
-                                self.dets['easy50'] += found
+                                self.dets['easy50'] += hit
                             if end_points['is_unique'][bid]:
                                 self.gts['unique50'] += 1
-                                self.dets['unique50'] += found
+                                self.dets['unique50'] += hit
                             else:
                                 self.gts['multi50'] += 1
-                                self.dets['multi50'] += found
+                                self.dets['multi50'] += hit
 
 
     
@@ -497,14 +599,32 @@ class GroundingEvaluator:
 import torch.distributed as dist
 from models.losses import _iou3d_par, box_cxcyczwhd_to_xyzxyz
 class RejectionGroundingEvaluator:
-    """
-    全面评估定位（grounding）和拒绝（rejection）任务。
-    """
-    def __init__(self, iou_thresh=0.5, rejection_thresh=0.5,
-                 voxel_size=1.0):
+    """Comprehensive evaluator for grounding and rejection."""
+
+    def __init__(
+        self,
+        iou_thresh=0.5,
+        rejection_thresh=0.5,
+        voxel_size=1.0,
+        dim_is_radius=False,
+        axis_perm=(0, 1, 2),
+        axis_sign=(1, 1, 1),
+        use_scene_offset=False,
+        offset_keys=("scene_offset", "origin", "pc_min", "shift", "scene_shift"),
+        gt_in_world=True,
+        debug=False,
+    ):
         self.iou_thresh = iou_thresh
         self.rejection_thresh = rejection_thresh
         self.voxel_size = voxel_size
+        self.dim_is_radius = dim_is_radius
+        self.axis_perm = axis_perm
+        self.axis_sign = axis_sign
+        self.use_scene_offset = use_scene_offset
+        self.offset_keys = offset_keys
+        self.gt_in_world = gt_in_world
+        self.debug = debug
+        self._debug_shown = False
         self.reset()
 
     def reset(self):
@@ -515,6 +635,48 @@ class RejectionGroundingEvaluator:
         self.fn = 0
         self.pos_count = 0
         self.neg_count = 0
+    # ------------------------------------------------------------------
+    # Helpers for coordinate restoration
+    def _get_scene_offset(self, end_points, bid, device):
+        for key in self.offset_keys:
+            if key in end_points:
+                off = end_points[key]
+                if isinstance(off, (list, tuple)):
+                    off = torch.tensor(off, device=device, dtype=torch.float32)
+                if isinstance(off, torch.Tensor):
+                    if off.ndim == 2:
+                        return off[bid].to(device)
+                    if off.ndim == 1:
+                        return off.to(device)
+        return torch.zeros(3, device=device)
+
+    def _restore_pred_boxes(self, boxes, end_points, bid):
+        device = boxes.device
+        center, dims = boxes[:, :3], boxes[:, 3:]
+        vs = self.voxel_size
+        if isinstance(vs, (list, tuple)):
+            vs = torch.tensor(vs, device=device, dtype=torch.float32).view(1, 3)
+        else:
+            vs = torch.tensor([vs, vs, vs], device=device).view(1, 3)
+        center = center * vs
+        dims = dims * vs
+        perm = list(self.axis_perm)
+        center = center[:, perm]
+        dims = dims[:, perm]
+        sign = torch.tensor(self.axis_sign, device=device).view(1, 3)
+        center = center * sign
+        if self.dim_is_radius:
+            dims = dims * 2
+        if self.use_scene_offset:
+            offset = self._get_scene_offset(end_points, bid, device).view(1, 3)
+            center = center + offset
+        return torch.cat([center, dims], dim=-1)
+
+    def _prep_gt_boxes(self, gt_boxes, end_points=None, bid=None):
+        boxes = torch.cat([gt_boxes.gravity_center, gt_boxes.dims], dim=1)
+        if not self.gt_in_world:
+            boxes = self._restore_pred_boxes(boxes, end_points, bid)
+        return boxes
 
     def evaluate(self, end_points, prefix):
         """
@@ -545,17 +707,14 @@ class RejectionGroundingEvaluator:
                     # Use .item() to convert the tensor to a Python float
                     print(f"\n[DEBUG] Positive Sample | Max Confidence: {best_score.item():.4f}")
 
-                def _prep_box(boxes):
-                    center = boxes.gravity_center
-                    dims = boxes.dims
-                    if getattr(self, 'voxel_size', 1.0) != 1.0:
-                        center = center * self.voxel_size
-                        dims = dims * self.voxel_size
-                    return torch.cat([center, dims], dim=1)
-
-                gt_bbox = _prep_box(gt_bboxes_list[i])
-                pred_box = _prep_box(pred_results['bboxes_3d'][best_score_idx:best_score_idx+1])
-
+                gt_bbox = self._prep_gt_boxes(gt_bboxes_list[i], end_points, i)
+                pred_box = torch.cat([
+                    pred_results['bboxes_3d'][best_score_idx:best_score_idx+1].gravity_center,
+                    pred_results['bboxes_3d'][best_score_idx:best_score_idx+1].dims,
+                ], dim=1)
+                pred_box = self._restore_pred_boxes(pred_box, end_points, i)
+                if not self.gt_in_world:
+                    gt_bbox = self._restore_pred_boxes(gt_bbox, end_points, i)
                 gt_box_ends = box_cxcyczwhd_to_xyzxyz(gt_bbox)
                 pred_box_ends = box_cxcyczwhd_to_xyzxyz(pred_box)
 
