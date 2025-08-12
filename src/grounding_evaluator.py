@@ -32,13 +32,28 @@ class GroundingEvaluator:
     """
 
     def __init__(self, only_root=True, thresholds=[0.25, 0.5],
-                 topks=[1, 5, 10], prefixes=[], filter_non_gt_boxes=False):
-        """Initialize accumulators."""
+                 topks=[1, 5, 10], prefixes=[], filter_non_gt_boxes=False,
+                 voxel_size=1.0):
+        """Initialize accumulators.
+
+        Args:
+            only_root (bool): detect only the root noun
+            thresholds (list): IoU thresholds to check
+            topks (list): k to evaluate top--k accuracy
+            prefixes (list): names of layers to evaluate
+            filter_non_gt_boxes (bool): whether to filter predictions
+                that do not correspond to GT boxes
+            voxel_size (float): optional scaling factor to recover
+                original coordinates from voxel coordinates. If the
+                predictions are already in the global coordinate frame
+                this should be ``1.0``.
+        """
         self.only_root = only_root
         self.thresholds = thresholds
         self.topks = topks
         self.prefixes = prefixes
         self.filter_non_gt_boxes = filter_non_gt_boxes
+        self.voxel_size = voxel_size
         self.reset()
 
     def reset(self):
@@ -138,20 +153,25 @@ class GroundingEvaluator:
 
         # Highest scoring box -> iou
         for bid in range(len(end_points['bbox_results'])):
-            num_obj = 1
-            gt_bboxes = end_points['gt_bboxes_3d'][bid]
-            gt_bboxes = torch.cat([gt_bboxes.gravity_center, gt_bboxes.dims], dim=1)
+            def _prep_boxes(boxes):
+                center = boxes.gravity_center
+                dims = boxes.dims
+                if getattr(self, 'voxel_size', 1.0) != 1.0:
+                    center = center * self.voxel_size
+                    dims = dims * self.voxel_size
+                return torch.cat([center, dims], dim=1)
+
+            gt_bboxes = _prep_boxes(end_points['gt_bboxes_3d'][bid])
             scores = end_points['bbox_results'][bid]['scores_3d']
-            bboxes = end_points['bbox_results'][bid]['bboxes_3d']
-            bboxes = torch.cat([bboxes.gravity_center, bboxes.dims], dim=1)
-            if scores.shape[0]>4:
+            bboxes = _prep_boxes(end_points['bbox_results'][bid]['bboxes_3d'])
+
+            if scores.shape[0] > 4:
                 _, top = torch.topk(scores, 5)
                 pbox = bboxes[top]
-                top = top.reshape(1,-1)
-                gt_bboxes = end_points['gt_bboxes_3d'][bid]
-                gt_bboxes = torch.cat([gt_bboxes.gravity_center, gt_bboxes.dims], dim=1)
+                top = top.reshape(1, -1)
+                gt_bboxes = _prep_boxes(end_points['gt_bboxes_3d'][bid])
             else:
-                padded_tensor = torch.zeros(5-bboxes.shape[0], 6, device=bboxes.device)
+                padded_tensor = torch.zeros(5 - bboxes.shape[0], 6, device=bboxes.device)
                 pbox = torch.cat([bboxes, padded_tensor], dim=0)
             # IoU
             ious, _ = _iou3d_par(
@@ -480,9 +500,11 @@ class RejectionGroundingEvaluator:
     """
     全面评估定位（grounding）和拒绝（rejection）任务。
     """
-    def __init__(self, iou_thresh=0.5, rejection_thresh=0.5):
+    def __init__(self, iou_thresh=0.5, rejection_thresh=0.5,
+                 voxel_size=1.0):
         self.iou_thresh = iou_thresh
         self.rejection_thresh = rejection_thresh
+        self.voxel_size = voxel_size
         self.reset()
 
     def reset(self):
@@ -509,7 +531,6 @@ class RejectionGroundingEvaluator:
             if not is_negative:
                 # --- Handle positive samples (localization task) ---
                 self.pos_count += 1
-                gt_bbox = gt_bboxes_list[i].tensor
                 pred_results = bbox_results_list[i]
 
                 if pred_results['scores_3d'].shape[0] == 0:
@@ -519,16 +540,24 @@ class RejectionGroundingEvaluator:
                     continue
 
                 best_score_idx = torch.argmax(pred_results['scores_3d'])
-                best_pred_box = pred_results['bboxes_3d'].tensor[best_score_idx].unsqueeze(0)
-
-                # --- CORRECTED PRINT STATEMENT ---
                 best_score = pred_results['scores_3d'][best_score_idx]
                 if i == 0 and dist.get_rank() == 0:
                     # Use .item() to convert the tensor to a Python float
                     print(f"\n[DEBUG] Positive Sample | Max Confidence: {best_score.item():.4f}")
 
-                gt_box_ends = box_cxcyczwhd_to_xyzxyz(gt_bbox[:, :6])
-                pred_box_ends = box_cxcyczwhd_to_xyzxyz(best_pred_box[:, :6])
+                def _prep_box(boxes):
+                    center = boxes.gravity_center
+                    dims = boxes.dims
+                    if getattr(self, 'voxel_size', 1.0) != 1.0:
+                        center = center * self.voxel_size
+                        dims = dims * self.voxel_size
+                    return torch.cat([center, dims], dim=1)
+
+                gt_bbox = _prep_box(gt_bboxes_list[i])
+                pred_box = _prep_box(pred_results['bboxes_3d'][best_score_idx:best_score_idx+1])
+
+                gt_box_ends = box_cxcyczwhd_to_xyzxyz(gt_bbox)
+                pred_box_ends = box_cxcyczwhd_to_xyzxyz(pred_box)
 
                 iou, _ = _iou3d_par(gt_box_ends.to(pred_box_ends.device), pred_box_ends)
 

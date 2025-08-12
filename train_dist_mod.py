@@ -162,14 +162,16 @@ class TrainTester(BaseTrainTester):
             self.logger.info("Using RejectionGroundingEvaluator for comprehensive evaluation.")
             evaluator = RejectionGroundingEvaluator(
                 iou_thresh=0.5,  # 您可以将其改为args参数或保持固定
-                rejection_thresh=args.rejection_thresh
+                rejection_thresh=args.rejection_thresh,
+                voxel_size=args.voxel_size
             )
         else:
             self.logger.info("Using original GroundingEvaluator for localization accuracy only.")
             evaluator = GroundingEvaluator(
-                only_root=True, thresholds=[0.25, 0.5],     
+                only_root=True, thresholds=[0.25, 0.5],
                 topks=[1], prefixes=['3dcnn'],
-                filter_non_gt_boxes=args.butd_cls
+                filter_non_gt_boxes=args.butd_cls,
+                voxel_size=args.voxel_size
             )
         # <<<<<<<<<<<<<<<<<<<<<<<< END: 修改代码 >>>>>>>>>>>>>>>>>>>>>>>>
 
