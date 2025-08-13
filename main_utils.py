@@ -159,7 +159,14 @@ def load_checkpoint(args, model, optimizer, scheduler):
     """Load from checkpoint."""
     print("=> loading checkpoint '{}'".format(args.checkpoint_path))
 
-    checkpoint = torch.load(args.checkpoint_path, map_location='cpu')
+    # PyTorch 2.6 sets ``weights_only=True`` by default for ``torch.load``.
+    # Older checkpoints include objects like ``argparse.Namespace`` which are
+    # rejected by the safe unpickler when ``weights_only`` is enabled. Explicitly
+    # disable the safety restriction here since we trust the source checkpoint
+    # and need the additional metadata it contains.
+    checkpoint = torch.load(
+        args.checkpoint_path, map_location="cpu", weights_only=False
+    )
     try:
         args.start_epoch = int(checkpoint['epoch']) + 1
     except Exception:
