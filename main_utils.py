@@ -148,6 +148,21 @@ def parse_option():
     parser.add_argument('--rejection_start_epoch', type=int, default=1,
                         help='Epoch to start training with rejection samples and loss.')
 
+    # calibration & evaluation
+    parser.add_argument('--dump_calib', action='store_true',
+                        help='Dump raw logits for calibration fitting.')
+    parser.add_argument('--calib_method', type=str, default='platt',
+                        choices=['none', 'temp', 'platt'],
+                        help='Calibration method to apply on logits.')
+    parser.add_argument('--calibrator_json', type=str, default=None,
+                        help='Path to fitted calibrator parameters.')
+    parser.add_argument('--thresholds_json', type=str, default=None,
+                        help='Path to threshold JSON.')
+    parser.add_argument('--tn_floor', type=float, default=0.98,
+                        help='TN floor used in threshold search.')
+    parser.add_argument('--calib_topk', type=int, default=5,
+                        help='Top-k boxes to dump for calibration.')
+
     args, _ = parser.parse_known_args()
 
     args.eval = args.eval or args.eval_train

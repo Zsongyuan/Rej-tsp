@@ -158,6 +158,17 @@ class TrainTester(BaseTrainTester):
         
         # <<<<<<<<<<<<<<<<<<<<<<<< START: 修改代码 >>>>>>>>>>>>>>>>>>>>>>>>
         # 根据是否使用拒绝机制，动态选择和初始化评估器
+        calib_cfg = None
+        thresh_cfg = None
+        if args.calibrator_json:
+            import json
+            with open(args.calibrator_json, 'r') as f:
+                calib_cfg = json.load(f)
+        if args.thresholds_json:
+            import json
+            with open(args.thresholds_json, 'r') as f:
+                thresh_cfg = json.load(f)
+
         if args.use_rejection and args.val_file_path:
             self.logger.info("Using RejectionGroundingEvaluator for comprehensive evaluation.")
             evaluator = RejectionGroundingEvaluator(
@@ -171,6 +182,10 @@ class TrainTester(BaseTrainTester):
                 offset_keys=tuple(args.offset_keys),
                 gt_in_world=args.gt_in_world,
                 debug=args.debug,
+                calibrator=calib_cfg,
+                thresholds=thresh_cfg,
+                dump_calib=args.dump_calib,
+                calib_topk=args.calib_topk,
             )
         else:
             self.logger.info("Using original GroundingEvaluator for localization accuracy only.")
@@ -211,7 +226,7 @@ class TrainTester(BaseTrainTester):
                 evaluator.evaluate(end_points, '3dcnn')      
 
         evaluator.synchronize_between_processes()
-        
+
         if dist.get_rank() == 0:
             if evaluator is not None:
                 self.logger.info(f'Evaluation results for Epoch [{epoch}]:')
@@ -223,6 +238,9 @@ class TrainTester(BaseTrainTester):
                         self.logger.info(''.join([
                             f"{'3dcnn'} Acc@{t:.2f}: ", f"Top-{1}: {evaluator.dets[('3dcnn', t, 1, 'bbf')] / max(evaluator.gts[('3dcnn', t, 1, 'bbf')], 1):.5f}"
                         ]))
+
+            if args.dump_calib:
+                evaluator.dump_calibration('output/calib')
 
         print('inf: ', np.array(inf_speeds).mean(),'vis_back_speeds: ', np.array(vis_back_speeds).mean(),
               'text_back_speeds: ', np.array(text_back_speeds).mean(),'fuiosn_speeds: ', np.array(fuiosn_speeds).mean(),

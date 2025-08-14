@@ -604,9 +604,14 @@ class RejectionGroundingEvaluator:
         offset_keys=("scene_offset", "origin", "pc_min", "shift", "scene_shift"),
         gt_in_world=True,
         debug=False,
+        calibrator=None,
+        thresholds=None,
+        dump_calib=False,
+        calib_topk=5,
     ):
         self.iou_thresh = iou_thresh
-        self.rejection_thresh = rejection_thresh
+        self.rejection_thresh = thresholds.get("tau_rej", rejection_thresh) if thresholds else rejection_thresh
+        self.det_thresh = thresholds.get("tau_det", 0.0) if thresholds else 0.0
         self.voxel_size = voxel_size
         self.dim_is_radius = dim_is_radius
         self.axis_perm = axis_perm
@@ -615,6 +620,9 @@ class RejectionGroundingEvaluator:
         self.offset_keys = offset_keys
         self.gt_in_world = gt_in_world
         self.debug = debug
+        self.calibrator = calibrator or {}
+        self.dump_calib = dump_calib
+        self.calib_topk = calib_topk
         self._debug_shown = False
         self.reset()
 
@@ -626,6 +634,9 @@ class RejectionGroundingEvaluator:
         self.fn = 0
         self.pos_count = 0
         self.neg_count = 0
+        if self.dump_calib:
+            self.det_records = []
+            self.rej_records = []
     # ------------------------------------------------------------------
     # Helpers for coordinate restoration
     def _get_scene_offset(self, end_points, bid, device):
@@ -661,6 +672,20 @@ class RejectionGroundingEvaluator:
         if not self.gt_in_world:
             boxes = self._restore_pred_boxes(boxes, end_points, bid)
         return boxes
+    
+    def _calibrate(self, logits, kind):
+        """Apply stored calibrator to logits and return probabilities."""
+        cfg = self.calibrator.get(kind)
+        if cfg is None or cfg.get('type', 'none') == 'none':
+            return torch.sigmoid(logits)
+        if cfg['type'] == 'platt':
+            a = cfg.get('a', 1.0)
+            b = cfg.get('b', 0.0)
+            logits = a * logits + b
+        elif cfg['type'] == 'temp':
+            T = cfg.get('T', 1.0)
+            logits = logits / max(T, 1e-6)
+        return torch.sigmoid(logits)
 
     def evaluate(self, end_points, prefix):
         """
@@ -672,29 +697,68 @@ class RejectionGroundingEvaluator:
                                       [False] * len(end_points['gt_bboxes_3d']))
 
         for i in range(len(is_negative_list)):
-            is_negative = is_negative_list[i]
-
-            if not is_negative:
-                # --- Handle positive samples (localization task) ---
-                self.pos_count += 1
-                pred_results = bbox_results_list[i]
-
-                if pred_results['scores_3d'].shape[0] == 0:
+            is_negative = int(is_negative_list[i])
+            pred_results = bbox_results_list[i]
+            scores = pred_results['scores_3d']
+            if scores.shape[0] == 0:
+                if is_negative:
+                    self.neg_count += 1
+                    self.tn += 1
+                else:
+                    self.pos_count += 1
                     self.fn += 1
-                    if i == 0 and dist.get_rank() == 0:
-                        print(f"\n[DEBUG] Positive Sample | No prediction made. Counted as FN.")
-                    continue
-
-                best_score_idx = torch.argmax(pred_results['scores_3d'])
-                best_score = pred_results['scores_3d'][best_score_idx]
+                    
                 if i == 0 and dist.get_rank() == 0:
-                    # Use .item() to convert the tensor to a Python float
-                    print(f"\n[DEBUG] Positive Sample | Max Confidence: {best_score.item():.4f}")
+                    print("\n[DEBUG] No prediction made.")
+                continue
+
+            logits = torch.logit(scores.clamp(1e-6, 1 - 1e-6))
+            if self.dump_calib:
+                scan_id = end_points.get('scan_ids', [None]*len(is_negative_list))[i]
+                ious = torch.zeros_like(logits)
+                if not is_negative:
+                    gt_bbox = self._prep_gt_boxes(gt_bboxes_list[i], end_points, i)
+                    pred_boxes = torch.cat([
+                        pred_results['bboxes_3d'].gravity_center,
+                        pred_results['bboxes_3d'].dims,
+                    ], dim=1)
+                    pred_boxes = self._restore_pred_boxes(pred_boxes, end_points, i)
+                    gt_box_ends = box_cxcyczwhd_to_xyzxyz(gt_bbox)
+                    pred_box_ends = box_cxcyczwhd_to_xyzxyz(pred_boxes)
+                    iou_mat, _ = _iou3d_par(gt_box_ends.to(pred_box_ends.device), pred_box_ends)
+                    ious = torch.max(iou_mat, dim=0)[0]
+                topk = min(self.calib_topk, logits.numel())
+                for j in range(topk):
+                    self.det_records.append({
+                        'z_det': float(logits[j].item()),
+                        'iou': float(ious[j].item()),
+                        'is_negative': int(is_negative),
+                        'sample_id': str(scan_id)
+                    })
+                max_logit = float(torch.max(logits).item())
+                self.rej_records.append({
+                    'z_rej_max': max_logit,
+                    'is_negative': int(is_negative),
+                    'sample_id': str(scan_id)
+                })
+
+            det_probs = self._calibrate(logits, 'detector')
+            max_prob, idx = det_probs.max(dim=0)
+            rej_prob = self._calibrate(torch.max(logits.unsqueeze(0)), 'rejector').squeeze()
+
+            if is_negative:
+                self.neg_count += 1
+                if rej_prob >= self.rejection_thresh or max_prob < self.det_thresh:
+                    self.tn += 1
+                else:
+                    self.fp += 1
+            else:
+                self.pos_count += 1
 
                 gt_bbox = self._prep_gt_boxes(gt_bboxes_list[i], end_points, i)
                 pred_box = torch.cat([
-                    pred_results['bboxes_3d'][best_score_idx:best_score_idx+1].gravity_center,
-                    pred_results['bboxes_3d'][best_score_idx:best_score_idx+1].dims,
+                    pred_results['bboxes_3d'][idx:idx+1].gravity_center,
+                    pred_results['bboxes_3d'][idx:idx+1].dims,
                 ], dim=1)
                 pred_box = self._restore_pred_boxes(pred_box, end_points, i)
                 if not self.gt_in_world:
@@ -704,33 +768,10 @@ class RejectionGroundingEvaluator:
 
                 iou, _ = _iou3d_par(gt_box_ends.to(pred_box_ends.device), pred_box_ends)
 
-                if torch.max(iou) >= self.iou_thresh:
+                if max_prob >= self.det_thresh and rej_prob < self.rejection_thresh and torch.max(iou) >= self.iou_thresh:
                     self.tp += 1
                 else:
                     self.fn += 1
-
-            else:
-                # --- Handle negative samples (rejection task) ---
-                self.neg_count += 1
-                pred_results = bbox_results_list[i]
-
-                if pred_results['scores_3d'].shape[0] == 0:
-                    self.tn += 1
-                    if i == 0 and dist.get_rank() == 0:
-                        print(f"\n[DEBUG] Negative Sample | No prediction made. Correctly Rejected (TN).")
-                    continue
-
-                max_confidence = torch.max(pred_results['scores_3d'])
-
-                # --- CORRECTED PRINT STATEMENT ---
-                if i == 0 and dist.get_rank() == 0:
-                    # Use .item() to convert the tensor to a Python float
-                    print(f"\n[DEBUG] Negative Sample | Max Confidence: {max_confidence.item():.4f}")
-
-                if max_confidence < self.rejection_thresh:
-                    self.tn += 1
-                else:
-                    self.fp += 1
 
     def synchronize_between_processes(self):
         """在分布式训练中同步所有进程的计数器"""
@@ -774,3 +815,13 @@ class RejectionGroundingEvaluator:
         print(f"    - Total Negative Samples: {self.neg_count}")
         print(f"    - Overall Accuracy ((TP + TN) / Total): {overall_accuracy:.4f}")
         print("="*50 + "\n")
+
+    def dump_calibration(self, out_dir):
+        if not self.dump_calib:
+            return
+        import os, pickle
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, 'vigil3d_det_logits.pkl'), 'wb') as f:
+            pickle.dump(self.det_records, f)
+        with open(os.path.join(out_dir, 'vigil3d_rej_logits.pkl'), 'wb') as f:
+            pickle.dump(self.rej_records, f)
