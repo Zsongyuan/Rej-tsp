@@ -11,5 +11,5 @@ TORCH_DISTRIBUTED_DEBUG=INFO CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.
     --log_dir ~/multimodal/Rej-tsp/output/logs/test \
     --lr_decay_epochs 50 75 \
     --augment_det \
-    --checkpoint_path ~/multimodal/Rej-tsp/checkpoints/ckpt_epoch_88.pth \
+    --checkpoint_path ~/multimodal/Rej-tsp/checkpoints/ckpt_epoch_90.pth \
     --eval "$@"

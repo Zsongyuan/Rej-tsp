@@ -46,6 +46,9 @@ class GroundingEvaluator:
         offset_keys=("scene_offset", "origin", "pc_min", "shift", "scene_shift"),
         gt_in_world=True,
         debug=False,
+        dump_calib=False,
+        calib_topk=5,
+        dataset_name="default",
     ):
         """Initialize accumulators and configuration parameters."""
         """Initialize accumulators.
@@ -74,6 +77,9 @@ class GroundingEvaluator:
         self.offset_keys = offset_keys
         self.gt_in_world = gt_in_world
         self.debug = debug
+        self.dump_calib = dump_calib
+        self.calib_topk = calib_topk
+        self.dataset_name = dataset_name
         self._debug_shown = False
         self.reset()
 
@@ -142,6 +148,9 @@ class GroundingEvaluator:
         self.gts.update({'vd50': 1e-14, 'vid50': 1e-14})
         self.gts.update({'hard50': 1e-14, 'easy50': 1e-14})
         self.gts.update({'multi50': 1e-14, 'unique50': 1e-14})
+
+        if self.dump_calib:
+            self.det_records = []
 
     def print_stats(self):
         """Print accumulated accuracies."""
@@ -225,6 +234,24 @@ class GroundingEvaluator:
                 end_points['bbox_results'][bid]['bboxes_3d'].gravity_center,
                 end_points['bbox_results'][bid]['bboxes_3d'].dims,
             ], dim=-1).reshape(-1, 6)
+
+            if self.dump_calib:
+                logits = torch.logit(scores.clamp(1e-6, 1 - 1e-6))
+                pred_boxes_world = self._restore_pred_boxes(pred_boxes, end_points, bid)
+                gt_box_ends = box_cxcyczwhd_to_xyzxyz(gt_bboxes)
+                pred_box_ends = box_cxcyczwhd_to_xyzxyz(pred_boxes_world)
+                iou_mat, _ = _iou3d_par(gt_box_ends.to(pred_box_ends.device), pred_box_ends)
+                ious = torch.max(iou_mat, dim=0)[0]
+                scan_id = end_points.get('scan_ids', [None]*len(end_points['bbox_results']))[bid]
+                is_negative = int(end_points.get('is_negative', [False]*len(end_points['bbox_results']))[bid])
+                topk = min(self.calib_topk, logits.numel())
+                for j in range(topk):
+                    self.det_records.append({
+                        'z_det': float(logits[j].item()),
+                        'iou': float(ious[j].item()),
+                        'is_negative': is_negative,
+                        'sample_id': str(scan_id)
+                    })
 
             num_boxes = scores.shape[0]
             if num_boxes >= max_k:
@@ -575,9 +602,9 @@ class GroundingEvaluator:
         auxi_entity_positive_map = torch.clone(end_points['auxi_entity_positive_map'])  # auxi
         rel_positive_map = torch.clone(end_points['rel_positive_map'])
 
-        positive_map[positive_map > 0] = 1                      
-        gt_center = end_points['center_label'][:, :, 0:3]       
-        gt_size = end_points['size_gts']                        
+        positive_map[positive_map > 0] = 1
+        gt_center = end_points['center_label'][:, :, 0:3]
+        gt_size = end_points['size_gts']
         gt_bboxes = torch.cat([gt_center, gt_size], dim=-1)     # GT box cxcyczwhd
         
         if self.only_root:
@@ -586,6 +613,15 @@ class GroundingEvaluator:
         
         return positive_map, modify_positive_map, pron_positive_map, other_entity_map, auxi_entity_positive_map, \
             rel_positive_map, gt_bboxes
+
+    def dump_calibration(self, out_dir):
+        if not self.dump_calib:
+            return
+        import os, pickle
+        os.makedirs(out_dir, exist_ok=True)
+        fname = f"{self.dataset_name}_det_logits.pkl"
+        with open(os.path.join(out_dir, fname), 'wb') as f:
+            pickle.dump(self.det_records, f)
     
 import torch.distributed as dist
 from models.losses import _iou3d_par, box_cxcyczwhd_to_xyzxyz
@@ -608,6 +644,8 @@ class RejectionGroundingEvaluator:
         thresholds=None,
         dump_calib=False,
         calib_topk=5,
+        dataset_name="default",
+        skip_rejection_export=None,
     ):
         self.iou_thresh = iou_thresh
         self.rejection_thresh = thresholds.get("tau_rej", rejection_thresh) if thresholds else rejection_thresh
@@ -623,6 +661,8 @@ class RejectionGroundingEvaluator:
         self.calibrator = calibrator or {}
         self.dump_calib = dump_calib
         self.calib_topk = calib_topk
+        self.dataset_name = dataset_name
+        self.skip_rejection_export = skip_rejection_export if skip_rejection_export is not None else (dataset_name == 'vigil3d')
         self._debug_shown = False
         self.reset()
 
@@ -636,7 +676,8 @@ class RejectionGroundingEvaluator:
         self.neg_count = 0
         if self.dump_calib:
             self.det_records = []
-            self.rej_records = []
+            if not self.skip_rejection_export:
+                self.rej_records = []
     # ------------------------------------------------------------------
     # Helpers for coordinate restoration
     def _get_scene_offset(self, end_points, bid, device):
@@ -735,12 +776,13 @@ class RejectionGroundingEvaluator:
                         'is_negative': int(is_negative),
                         'sample_id': str(scan_id)
                     })
-                max_logit = float(torch.max(logits).item())
-                self.rej_records.append({
-                    'z_rej_max': max_logit,
-                    'is_negative': int(is_negative),
-                    'sample_id': str(scan_id)
-                })
+                if not self.skip_rejection_export:
+                    max_logit = float(torch.max(logits).item())
+                    self.rej_records.append({
+                        'z_rej_max': max_logit,
+                        'is_negative': int(is_negative),
+                        'sample_id': str(scan_id)
+                    })
 
             det_probs = self._calibrate(logits, 'detector')
             max_prob, idx = det_probs.max(dim=0)
@@ -821,7 +863,8 @@ class RejectionGroundingEvaluator:
             return
         import os, pickle
         os.makedirs(out_dir, exist_ok=True)
-        with open(os.path.join(out_dir, 'vigil3d_det_logits.pkl'), 'wb') as f:
+        with open(os.path.join(out_dir, f'{self.dataset_name}_det_logits.pkl'), 'wb') as f:
             pickle.dump(self.det_records, f)
-        with open(os.path.join(out_dir, 'vigil3d_rej_logits.pkl'), 'wb') as f:
-            pickle.dump(self.rej_records, f)
+        if not self.skip_rejection_export:
+            with open(os.path.join(out_dir, f'{self.dataset_name}_rej_logits.pkl'), 'wb') as f:
+                pickle.dump(self.rej_records, f)

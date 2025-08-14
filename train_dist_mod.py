@@ -169,7 +169,10 @@ class TrainTester(BaseTrainTester):
             with open(args.thresholds_json, 'r') as f:
                 thresh_cfg = json.load(f)
 
-        if args.use_rejection and args.val_file_path:
+        if args.test_dataset == 'vigil3d':
+            args.use_rejection = False
+
+        if args.use_rejection or args.dump_calib:
             self.logger.info("Using RejectionGroundingEvaluator for comprehensive evaluation.")
             evaluator = RejectionGroundingEvaluator(
                 iou_thresh=0.5,
@@ -186,6 +189,7 @@ class TrainTester(BaseTrainTester):
                 thresholds=thresh_cfg,
                 dump_calib=args.dump_calib,
                 calib_topk=args.calib_topk,
+                dataset_name=args.test_dataset,
             )
         else:
             self.logger.info("Using original GroundingEvaluator for localization accuracy only.")
@@ -203,8 +207,7 @@ class TrainTester(BaseTrainTester):
                 offset_keys=tuple(args.offset_keys),
                 gt_in_world=args.gt_in_world,
                 debug=args.debug,
-                dump_calib=args.dump_calib,
-                calib_topk=args.calib_topk,
+                dataset_name=args.test_dataset,
             )
         # <<<<<<<<<<<<<<<<<<<<<<<< END: 修改代码 >>>>>>>>>>>>>>>>>>>>>>>>
 
