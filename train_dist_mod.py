@@ -203,6 +203,8 @@ class TrainTester(BaseTrainTester):
                 offset_keys=tuple(args.offset_keys),
                 gt_in_world=args.gt_in_world,
                 debug=args.debug,
+                dump_calib=args.dump_calib,
+                calib_topk=args.calib_topk,
             )
         # <<<<<<<<<<<<<<<<<<<<<<<< END: 修改代码 >>>>>>>>>>>>>>>>>>>>>>>>
 
@@ -239,7 +241,7 @@ class TrainTester(BaseTrainTester):
                             f"{'3dcnn'} Acc@{t:.2f}: ", f"Top-{1}: {evaluator.dets[('3dcnn', t, 1, 'bbf')] / max(evaluator.gts[('3dcnn', t, 1, 'bbf')], 1):.5f}"
                         ]))
 
-            if args.dump_calib:
+            if args.dump_calib and hasattr(evaluator, "dump_calibration"):
                 evaluator.dump_calibration('output/calib')
 
         print('inf: ', np.array(inf_speeds).mean(),'vis_back_speeds: ', np.array(vis_back_speeds).mean(),
