@@ -12,6 +12,8 @@ TORCH_DISTRIBUTED_DEBUG=INFO CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.
     --lr_decay_epochs 50 75 \
     --augment_det \
     --use_rejection \
+    --text_unfreeze_layers 0 \
+    --vision_unfreeze_layers 0 \
     --rejection_loss_weight 0.1 \
     --wo_obj_name ~/multimodal/Rej-tsp/tns/train_mixed_36665_0.5.json \
     --val_file_path ~/multimodal/Rej-tsp/tns/val_mixed_9508_0.5.json \

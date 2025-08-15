@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -44,22 +45,44 @@ class BeaUTyDETR(nn.Module):
 
         # Visual encoder
         self.vision_backbone = TSPBackbone(in_channels=6)
-        # Freeze visual backbone except for the last ``vision_unfreeze_layers`` stages
+
+        # Validate stage names to avoid silent freezing issues
+        stage_names = [f"layer{i}" for i in range(4, 0, -1)]
+        for name in stage_names:
+            if not hasattr(self.vision_backbone, name):
+                raise AttributeError(
+                    f"TSPBackbone missing stage {name}; adjust vision_unfreeze_layers handling."
+                )
+
+        # Freeze all backbone params first
         for param in self.vision_backbone.parameters():
             param.requires_grad = False
+
+        # Track trainable stages for BN handling later
+        self._trainable_stages = []
         if vision_unfreeze_layers > 0:
-            # unfreeze from deepest layers: layer4, layer3, ...
-            stage_names = [f'layer{i}' for i in range(4, 0, -1)]
             for name in stage_names[:vision_unfreeze_layers]:
-                if hasattr(self.vision_backbone, name):
-                    for param in getattr(self.vision_backbone, name).parameters():
-                        param.requires_grad = True
+                stage = getattr(self.vision_backbone, name)
+                for param in stage.parameters():
+                    param.requires_grad = True
+                self._trainable_stages.append(stage)
+
+        # Freeze BN running stats in frozen stages
+        self._freeze_bn_in_frozen_stages()
 
         # Text encoder
-        t_type = f'{data_path}roberta-base/'
-        self.tokenizer = RobertaTokenizerFast.from_pretrained(t_type, local_files_only=True)
-        # self.text_encoder = RobertaModel.from_pretrained(t_type, local_files_only=True)
-        self.text_encoder = RobertaModel.from_pretrained(t_type, local_files_only=True, use_safetensors=False)
+        t_type = os.path.join(data_path, "roberta-base") if data_path else "roberta-base"
+        try:
+            self.tokenizer = RobertaTokenizerFast.from_pretrained(t_type, local_files_only=True)
+            self.text_encoder = RobertaModel.from_pretrained(
+                t_type, local_files_only=True, use_safetensors=False
+            )
+        except (OSError, ValueError):
+            # Fall back to downloading weights if local files are unavailable
+            self.tokenizer = RobertaTokenizerFast.from_pretrained("roberta-base")
+            self.text_encoder = RobertaModel.from_pretrained(
+                "roberta-base", use_safetensors=False
+            )
         # Freeze all parameters then optionally unfreeze last ``text_unfreeze_layers`` blocks
         for param in self.text_encoder.parameters():
             param.requires_grad = False
@@ -72,10 +95,57 @@ class BeaUTyDETR(nn.Module):
             nn.Linear(self.text_encoder.config.hidden_size, d_model),
             nn.LayerNorm(d_model, eps=1e-12),
             nn.Dropout(0.1)
-        )       
-        
+        )
+
         # self.neck = TR3DNeck()
         self.head = TSPHead(voxel_size=self.voxel_size)
+
+    def _freeze_bn(self, module):
+        """Set BatchNorm layers to eval mode and disable gradients."""
+        FrozenBN = (
+            nn.BatchNorm1d,
+            nn.BatchNorm2d,
+            nn.BatchNorm3d,
+            ME.MinkowskiBatchNorm,
+            getattr(ME, "MinkowskiSyncBatchNorm", nn.Identity),
+        )
+        for m in module.modules():
+            if isinstance(m, FrozenBN):
+                m.eval()
+                if hasattr(m, "weight") and m.weight is not None:
+                    m.weight.requires_grad_(False)
+                if hasattr(m, "bias") and m.bias is not None:
+                    m.bias.requires_grad_(False)
+
+    def _unfreeze_bn(self, module):
+        """Enable training mode and gradients for BatchNorm layers."""
+        FrozenBN = (
+            nn.BatchNorm1d,
+            nn.BatchNorm2d,
+            nn.BatchNorm3d,
+            ME.MinkowskiBatchNorm,
+            getattr(ME, "MinkowskiSyncBatchNorm", nn.Identity),
+        )
+        for m in module.modules():
+            if isinstance(m, FrozenBN):
+                m.train()
+                if hasattr(m, "weight") and m.weight is not None:
+                    m.weight.requires_grad_(True)
+                if hasattr(m, "bias") and m.bias is not None:
+                    m.bias.requires_grad_(True)
+
+    def _freeze_bn_in_frozen_stages(self):
+        """Freeze BN stats for all frozen stages."""
+        self._freeze_bn(self.vision_backbone)
+        for stage in self._trainable_stages:
+            self._unfreeze_bn(stage)
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if mode:
+            # ensure frozen stages keep BN in eval
+            self._freeze_bn_in_frozen_stages()
+        return self
         
     
     # BRIEF forward.
@@ -101,8 +171,9 @@ class BeaUTyDETR(nn.Module):
         ).to(inputs['point_clouds'].device)
         
         encoded_text = self.text_encoder(**tokenized)
-        text_feats = self.text_projector(encoded_text.last_hidden_state) 
-        text_attention_mask = tokenized.attention_mask.ne(1).bool()
+        text_feats = self.text_projector(encoded_text.last_hidden_state)
+        # attention_mask: 1 for valid tokens, 0 for padding
+        text_attention_mask = tokenized.attention_mask.eq(0)
         text_time = time.time() - start_time
         times = {
             "visual_time": visual_time,
