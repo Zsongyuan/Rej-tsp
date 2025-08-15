@@ -1,0 +1,39 @@
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/torch/distributed/launch.py:208: FutureWarning: The module torch.distributed.launch is deprecated
+and will be removed in future. Use torchrun.
+Note that --use-env is set by default in torchrun.
+If your script expects `--local-rank` argument to be set, please
+change it to read from `os.environ['LOCAL_RANK']` instead. See 
+https://pytorch.org/docs/stable/distributed.html#launch-utility for 
+further instructions
+
+  main()
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/utils/generic.py:441: FutureWarning: `torch.utils._pytree._register_pytree_node` is deprecated. Please use `torch.utils._pytree.register_pytree_node` instead.
+  _torch_pytree._register_pytree_node(
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/utils/generic.py:309: FutureWarning: `torch.utils._pytree._register_pytree_node` is deprecated. Please use `torch.utils._pytree.register_pytree_node` instead.
+  _torch_pytree._register_pytree_node(
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/utils/generic.py:309: FutureWarning: `torch.utils._pytree._register_pytree_node` is deprecated. Please use `torch.utils._pytree.register_pytree_node` instead.
+  _torch_pytree._register_pytree_node(
+[08/14 16:26:33 logs_rejection]: Full config saved to /home/zhu/multimodal/Rej-tsp/ScanRefer/output/logs_rejection/scanrefer/1755159993/config.json
+[08/14 16:26:33 logs_rejection]: {'num_target': 256, 'sampling': 'kps', 'voxel_size': 0.01, 'dim_is_radius': False, 'axis_perm': [0, 1, 2], 'axis_sign': [1, 1, 1], 'use_scene_offset': False, 'offset_keys': ['scene_offset', 'origin', 'pc_min', 'shift', 'scene_shift'], 'gt_in_world': True, 'num_encoder_layers': 3, 'num_decoder_layers': 6, 'self_position_embedding': 'loc_learned', 'self_attend': False, 'query_points_obj_topk': 4, 'use_contrastive_align': False, 'use_soft_token_loss': False, 'detect_intermediate': True, 'joint_det': True, 'batch_size': 5, 'dataset': ['scanrefer'], 'test_dataset': 'scanrefer', 'data_root': '/home/zhu/multimodal/Rej-tsp/', 'use_height': False, 'use_color': True, 'use_multiview': False, 'wo_obj_name': '/home/zhu/multimodal/Rej-tsp/tns/train_mixed_36665.json', 'butd': False, 'butd_gt': False, 'butd_cls': False, 'augment_det': True, 'num_workers': 16, 'start_epoch': 79, 'max_epoch': 400, 'optimizer': 'adamW', 'weight_decay': 0.0005, 'lr': 5e-05, 'keep_trans_lr': 5e-05, 'text_encoder_lr': 1e-05, 'box_select_lr': 0.0004, 'lr_scheduler': 'step', 'lr_decay_epochs': [116, 143], 'lr_decay_rate': 0.1, 'clip_norm': 0.1, 'bn_momentum': 0.1, 'syncbn': False, 'warmup_epoch': -1, 'warmup_multiplier': 100, 'checkpoint_path': '/home/zhu/multimodal/Rej-tsp/ScanRefer/output/logs_rejection/scanrefer/1754902601/ckpt_epoch_78.pth', 'log_dir': '/home/zhu/multimodal/Rej-tsp/ScanRefer/output/logs_rejection/scanrefer/1755159993', 'print_freq': 500, 'save_freq': 1, 'val_freq': 1, 'local_rank': None, 'ap_iou_thresholds': [0.25, 0.5], 'rng_seed': 0, 'debug': False, 'eval': False, 'eval_train': False, 'pp_checkpoint': None, 'reduce_lr': False, 'use_rejection': True, 'rejection_loss_weight': 0.1, 'positive_sample_ratio': 0.5, 'val_file_path': '/home/zhu/multimodal/Rej-tsp/tns/val_mixed.json', 'rejection_thresh': 0.5, 'rejection_start_epoch': 82, 'dump_calib': False, 'calib_method': 'platt', 'calibrator_json': None, 'thresholds_json': None, 'tn_floor': 0.98, 'calib_topk': 5}
+[INFO] --wo_obj_name is provided. Skipping default 'scannet' dataset loading for training.
+Loading datasets: ['scanrefer']
+Loading train and val scan data...
+Total scans loaded: 1513
+Loading custom training annotations from: /home/zhu/multimodal/Rej-tsp/tns/train_mixed_36665.json
+
+[Curriculum Learning] Current epoch 79 is less than rejection_start_epoch 82.
+Filtering dataset to use POSITIVE SAMPLES ONLY.
+Dataset size reduced from 73330 to 36665.
+
+Loading train and val scan data...
+Total scans loaded: 1513
+Loading custom validation annotations from: /home/zhu/multimodal/Rej-tsp/tns/val_mixed.json
+[08/14 16:27:42 logs_rejection]: length of training dataset: 36665
+[08/14 16:27:42 logs_rejection]: length of testing dataset: 16307
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/modeling_utils.py:519: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  return torch.load(checkpoint_file, map_location=map_location)
+=> loading checkpoint '/home/zhu/multimodal/Rej-tsp/ScanRefer/output/logs_rejection/scanrefer/1754902601/ckpt_epoch_78.pth'
+=> loaded successfully '/home/zhu/multimodal/Rej-tsp/ScanRefer/output/logs_rejection/scanrefer/1754902601/ckpt_epoch_78.pth' (epoch 78)
+Epoch 79:   0%|          | 0/7333 [00:00<?, ?it/s]

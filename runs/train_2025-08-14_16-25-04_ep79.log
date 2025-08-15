@@ -1,0 +1,85 @@
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/torch/distributed/launch.py:208: FutureWarning: The module torch.distributed.launch is deprecated
+and will be removed in future. Use torchrun.
+Note that --use-env is set by default in torchrun.
+If your script expects `--local-rank` argument to be set, please
+change it to read from `os.environ['LOCAL_RANK']` instead. See 
+https://pytorch.org/docs/stable/distributed.html#launch-utility for 
+further instructions
+
+  main()
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/utils/generic.py:441: FutureWarning: `torch.utils._pytree._register_pytree_node` is deprecated. Please use `torch.utils._pytree.register_pytree_node` instead.
+  _torch_pytree._register_pytree_node(
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/utils/generic.py:309: FutureWarning: `torch.utils._pytree._register_pytree_node` is deprecated. Please use `torch.utils._pytree.register_pytree_node` instead.
+  _torch_pytree._register_pytree_node(
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/utils/generic.py:309: FutureWarning: `torch.utils._pytree._register_pytree_node` is deprecated. Please use `torch.utils._pytree.register_pytree_node` instead.
+  _torch_pytree._register_pytree_node(
+[08/14 16:25:09 logs_rejection]: Full config saved to /home/zhu/zhu/Rej-tsp/ScanRefer/output/logs_rejection/scanrefer/1755159909/config.json
+[08/14 16:25:09 logs_rejection]: {'num_target': 256, 'sampling': 'kps', 'voxel_size': 0.01, 'dim_is_radius': False, 'axis_perm': [0, 1, 2], 'axis_sign': [1, 1, 1], 'use_scene_offset': False, 'offset_keys': ['scene_offset', 'origin', 'pc_min', 'shift', 'scene_shift'], 'gt_in_world': True, 'num_encoder_layers': 3, 'num_decoder_layers': 6, 'self_position_embedding': 'loc_learned', 'self_attend': False, 'query_points_obj_topk': 4, 'use_contrastive_align': False, 'use_soft_token_loss': False, 'detect_intermediate': True, 'joint_det': True, 'batch_size': 5, 'dataset': ['scanrefer'], 'test_dataset': 'scanrefer', 'data_root': '/home/zhu/zhu/Rej-tsp/', 'use_height': False, 'use_color': True, 'use_multiview': False, 'wo_obj_name': '/home/zhu/zhu/Rej-tsp/tns/train_mixed_36665.json', 'butd': False, 'butd_gt': False, 'butd_cls': False, 'augment_det': True, 'num_workers': 16, 'start_epoch': 79, 'max_epoch': 400, 'optimizer': 'adamW', 'weight_decay': 0.0005, 'lr': 5e-05, 'keep_trans_lr': 5e-05, 'text_encoder_lr': 1e-05, 'box_select_lr': 0.0004, 'lr_scheduler': 'step', 'lr_decay_epochs': [116, 143], 'lr_decay_rate': 0.1, 'clip_norm': 0.1, 'bn_momentum': 0.1, 'syncbn': False, 'warmup_epoch': -1, 'warmup_multiplier': 100, 'checkpoint_path': '/home/zhu/multimodal/Rej-tsp/ScanRefer/output/logs_rejection/scanrefer/1754902601/ckpt_epoch_78.pth', 'log_dir': '/home/zhu/zhu/Rej-tsp/ScanRefer/output/logs_rejection/scanrefer/1755159909', 'print_freq': 500, 'save_freq': 1, 'val_freq': 1, 'local_rank': None, 'ap_iou_thresholds': [0.25, 0.5], 'rng_seed': 0, 'debug': False, 'eval': False, 'eval_train': False, 'pp_checkpoint': None, 'reduce_lr': False, 'use_rejection': True, 'rejection_loss_weight': 0.1, 'positive_sample_ratio': 0.5, 'val_file_path': '/home/zhu/zhu/Rej-tsp/tns/val_mixed.json', 'rejection_thresh': 0.5, 'rejection_start_epoch': 82, 'dump_calib': False, 'calib_method': 'platt', 'calibrator_json': None, 'thresholds_json': None, 'tn_floor': 0.98, 'calib_topk': 5}
+[INFO] --wo_obj_name is provided. Skipping default 'scannet' dataset loading for training.
+Loading datasets: ['scanrefer']
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/utils/hub.py", line 389, in cached_file
+[rank0]:     resolved_file = hf_hub_download(
+[rank0]:   File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/huggingface_hub/utils/_validators.py", line 106, in _inner_fn
+[rank0]:     validate_repo_id(arg_value)
+[rank0]:   File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/huggingface_hub/utils/_validators.py", line 154, in validate_repo_id
+[rank0]:     raise HFValidationError(
+[rank0]: huggingface_hub.errors.HFValidationError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': '/home/zhu/zhu/Rej-tsp/roberta-base/'. Use `repo_type` argument if needed.
+
+[rank0]: The above exception was the direct cause of the following exception:
+
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/zhu/multimodal/Rej-tsp/train_dist_mod.py", line 404, in <module>
+[rank0]:     ckpt_path = train_tester.main(opt)
+[rank0]:   File "/home/zhu/multimodal/Rej-tsp/main_utils.py", line 382, in main
+[rank0]:     train_loader, test_loader = self.get_loaders(args)
+[rank0]:   File "/home/zhu/multimodal/Rej-tsp/main_utils.py", line 284, in get_loaders
+[rank0]:     train_dataset, test_dataset = self.get_datasets(args)
+[rank0]:   File "/home/zhu/multimodal/Rej-tsp/train_dist_mod.py", line 61, in get_datasets
+[rank0]:     train_dataset = Joint3DDataset(
+[rank0]:   File "/home/zhu/multimodal/Rej-tsp/src/joint_det_dataset.py", line 111, in __init__
+[rank0]:     self.tokenizer = RobertaTokenizerFast.from_pretrained(f'{self.data_path}roberta-base/', local_files_only=True)
+[rank0]:   File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/tokenization_utils_base.py", line 1951, in from_pretrained
+[rank0]:     resolved_config_file = cached_file(
+[rank0]:   File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/transformers/utils/hub.py", line 454, in cached_file
+[rank0]:     raise EnvironmentError(
+[rank0]: OSError: Incorrect path_or_model_id: '/home/zhu/zhu/Rej-tsp/roberta-base/'. Please provide either the path to a local folder or the repo_id of a model on the Hub.
+[rank0]:[W814 16:25:09.194338310 ProcessGroupNCCL.cpp:1168] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())
+E0814 16:25:10.176894 139806141101888 torch/distributed/elastic/multiprocessing/api.py:833] failed (exitcode: 1) local_rank: 0 (pid: 82826) of binary: /home/zhu/miniconda3/envs/tsp/bin/python
+Traceback (most recent call last):
+  File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/torch/distributed/launch.py", line 208, in <module>
+    main()
+  File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/typing_extensions.py", line 2950, in wrapper
+    return arg(*args, **kwargs)
+  File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/torch/distributed/launch.py", line 204, in main
+    launch(args)
+  File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/torch/distributed/launch.py", line 189, in launch
+    run(args)
+  File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/torch/distributed/run.py", line 892, in run
+    elastic_launch(
+  File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/torch/distributed/launcher/api.py", line 133, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+  File "/home/zhu/miniconda3/envs/tsp/lib/python3.9/site-packages/torch/distributed/launcher/api.py", line 264, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+train_dist_mod.py FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2025-08-14_16:25:10
+  host      : ZHU.localdomain
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 82826)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
