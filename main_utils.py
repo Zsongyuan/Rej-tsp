@@ -677,11 +677,17 @@ class BaseTrainTester:
                     meters[meter_key].update(value, batch_size)
             
             # 更新进度条显示
+            # 如果没有计算rejection loss，则显示N/A
+            rej_display = (
+                f'{meters["rejection"].avg:.4f}'
+                if meters['rejection'].count > 0 else 'N/A'
+            )
+
             postfix = {
                 'Loss': f'{meters["total"].avg:.4f}',
                 'BBox': f'{meters["bbox"].avg:.4f}',
                 'Cls': f'{meters["cls"].avg:.4f}',
-                'Rej': f'{meters["rejection"].avg:.4f}',  # 显示rejection loss
+                'Rej': rej_display,  # 显示rejection loss
                 'LR': f'{optimizer.param_groups[0]["lr"]:.6f}'
             }
             train_loader.set_postfix(postfix)
@@ -698,7 +704,7 @@ class BaseTrainTester:
                     f'CE: {meters["ce"].avg:.4f}, '
                     f'GIoU: {meters["giou"].avg:.4f}, '
                     f'Sem: {meters["sem_align"].avg:.4f}, '
-                    f'Rej: {meters["rejection"].avg:.4f}, '  # 添加rejection loss
+                    f'Rej: {rej_display}, '  # 添加rejection loss
                     f'QP: {meters["query_points"].avg:.4f}) '
                     f'LR: {optimizer.param_groups[0]["lr"]:.6f} '
                     f'Grad: {grad_norm:.4f}'
@@ -722,6 +728,11 @@ class BaseTrainTester:
                     )
         
         # Epoch结束总结
+        rej_avg = (
+            f'{meters["rejection"].avg:.4f}'
+            if meters['rejection'].count > 0 else 'N/A'
+        )
+
         summary = (
             f'\nEpoch {epoch} Training Summary:\n'
             f'  Total Loss: {meters["total"].avg:.4f}\n'
@@ -732,13 +743,18 @@ class BaseTrainTester:
             f'  Grounding Losses:\n'
             f'    - CE Loss: {meters["ce"].avg:.4f}\n'
             f'    - Semantic Align: {meters["sem_align"].avg:.4f}\n'
-            f'    - Rejection Loss: {meters["rejection"].avg:.4f}\n'  # 添加rejection loss
+            f'    - Rejection Loss: {rej_avg}\n'  # 添加rejection loss
             f'  Auxiliary Losses:\n'
             f'    - Keep Loss: {meters["keep"].avg:.4f}\n'
             f'    - Com Loss: {meters["com"].avg:.4f}\n'
             f'    - Query Points: {meters["query_points"].avg:.4f}\n'
         )
         self.logger.info(summary)
+
+        if meters['rejection'].count == 0:
+            self.logger.warning(
+                "Rejection loss was not computed this epoch; no negative samples were encountered."
+            )
         
         return meters
 
