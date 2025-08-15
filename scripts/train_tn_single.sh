@@ -13,8 +13,8 @@ TORCH_DISTRIBUTED_DEBUG=INFO CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.
     --augment_det \
     --use_rejection \
     --rejection_loss_weight 0.1 \
-    --wo_obj_name ~/multimodal/Rej-tsp/tns/train_mixed_36665.json \
-    --val_file_path ~/multimodal/Rej-tsp/tns/val_mixed.json \
+    --wo_obj_name ~/multimodal/Rej-tsp/tns/train_mixed_36665_0.5.json \
+    --val_file_path ~/multimodal/Rej-tsp/tns/val_mixed_9508_0.5.json \
     --log_dir ~/multimodal/Rej-tsp/ScanRefer/output/logs_rejection \
     --checkpoint_path ~/multimodal/Rej-tsp/checkpoints/ckpt_scanrefer.pth \
     --start_epoch 79 \

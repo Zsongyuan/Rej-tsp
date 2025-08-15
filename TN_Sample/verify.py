@@ -302,10 +302,10 @@ def process_sample_worker(sample: Dict, scene_graph_dir: str) -> Tuple[bool, str
     return is_valid, reason, sample
 
 if __name__ == "__main__":
-    GENERATED_NEGATIVES_FILE = "./llm_generated_negatives_v3.json"
+    GENERATED_NEGATIVES_FILE = "./llm_generated_negatives_v3_val.json"
     SCENE_GRAPH_DIR = "./scene_graphs"
-    VERIFIED_OUTPUT_FILE = "./final_verified_negatives.json"
-    REJECTED_OUTPUT_FILE = "./final_rejected_negatives.json"
+    VERIFIED_OUTPUT_FILE = "./final_verified_negatives_val.json"
+    REJECTED_OUTPUT_FILE = "./final_rejected_negatives_val.json"
 
     if not os.path.exists(GENERATED_NEGATIVES_FILE):
         print(f"Error: Input file not found at {GENERATED_NEGATIVES_FILE}")

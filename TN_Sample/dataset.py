@@ -1,7 +1,7 @@
 import json
 import random
 
-def create_mixed_dataset(negative_file, positive_file, output_file, num_samples=36665):
+def create_mixed_dataset(negative_file, positive_file, output_file, num_samples=36665, ratio=0.5):
     """
     Combines negative and positive samples into a single JSON file for training.
 
@@ -10,6 +10,7 @@ def create_mixed_dataset(negative_file, positive_file, output_file, num_samples=
         positive_file (str): Path to the JSON file with positive samples.
         output_file (str): Path to save the combined JSON file.
         num_samples (int): The number of samples to take from each file.
+        ratio (float): The ratio of negative to positive samples.
     """
     try:
         # Load negative samples
@@ -31,12 +32,14 @@ def create_mixed_dataset(negative_file, positive_file, output_file, num_samples=
 
     # Take the first num_samples and add the 'is_negative' flag
     processed_negatives = []
-    for sample in negative_data[:num_samples]:
+    random.shuffle(negative_data)
+    for sample in negative_data[:int(num_samples * ratio)]:
         sample['is_negative'] = True
         processed_negatives.append(sample)
 
     processed_positives = []
-    for sample in positive_data[:num_samples]:
+    random.shuffle(positive_data)
+    for sample in positive_data[:int(num_samples)]:
         sample['is_negative'] = False
         processed_positives.append(sample)
 
@@ -54,9 +57,9 @@ def create_mixed_dataset(negative_file, positive_file, output_file, num_samples=
 
 if __name__ == "__main__":
     # Define your file paths
-    negatives_json = './sampled_negatives_36665.json'
-    positives_json = '../ScanRefer/ScanRefer_filtered_train.json'
-    output_json = 'train_mixed_36665.json'
+    negatives_json = './final_verified_negatives_val.json'
+    positives_json = '../ScanRefer/ScanRefer_filtered_val.json'
+    output_json = 'val_mixed_9508_0.5.json'
 
     # Run the script
-    create_mixed_dataset(negatives_json, positives_json, output_json, num_samples=36665)
+    create_mixed_dataset(negatives_json, positives_json, output_json, num_samples=9508, ratio=0.5)

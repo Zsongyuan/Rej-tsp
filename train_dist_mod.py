@@ -119,7 +119,9 @@ class TrainTester(BaseTrainTester):
             pointnet_ckpt=args.pp_checkpoint,
             data_path = args.data_root,
             self_attend=args.self_attend,
-            voxel_size = args.voxel_size
+            voxel_size = args.voxel_size,
+            text_unfreeze_layers=args.text_unfreeze_layers,
+            vision_unfreeze_layers=args.vision_unfreeze_layers
         )
         return model
 

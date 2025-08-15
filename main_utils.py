@@ -55,6 +55,10 @@ def parse_option():
                         help='Keys to search for scene offset in end_points.')
     parser.add_argument('--gt_in_world', action='store_true', default=True,
                         help='Ground truth boxes already in world coordinates.')
+    parser.add_argument('--text_unfreeze_layers', type=int, default=0,
+                        help='Number of last Transformer layers in the text encoder to finetune.')
+    parser.add_argument('--vision_unfreeze_layers', type=int, default=0,
+                        help='Number of last stages in the visual backbone to finetune.')
 
     # Transformer
     parser.add_argument('--num_encoder_layers', default=3, type=int)

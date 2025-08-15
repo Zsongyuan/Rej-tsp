@@ -23,8 +23,16 @@ class BeaUTyDETR(nn.Module):
                  num_decoder_layers=6, self_position_embedding='loc_learned',
                  contrastive_align_loss=True,
                  d_model=128, butd=True, pointnet_ckpt=None, data_path=None,
-                 self_attend=True, voxel_size=0.01):
-        """Initialize layers."""
+                 self_attend=True, voxel_size=0.01,
+                 text_unfreeze_layers=0, vision_unfreeze_layers=0):
+        """Initialize layers.
+
+        Args:
+            text_unfreeze_layers (int): Number of last Transformer layers in the
+                text encoder to finetune. ``0`` means fully frozen.
+            vision_unfreeze_layers (int): Number of last stages in the visual
+                backbone to finetune. ``0`` means fully frozen.
+        """
         super().__init__()
 
         self.num_queries = num_queries
@@ -36,14 +44,29 @@ class BeaUTyDETR(nn.Module):
 
         # Visual encoder
         self.vision_backbone = TSPBackbone(in_channels=6)
-        
+        # Freeze visual backbone except for the last ``vision_unfreeze_layers`` stages
+        for param in self.vision_backbone.parameters():
+            param.requires_grad = False
+        if vision_unfreeze_layers > 0:
+            # unfreeze from deepest layers: layer4, layer3, ...
+            stage_names = [f'layer{i}' for i in range(4, 0, -1)]
+            for name in stage_names[:vision_unfreeze_layers]:
+                if hasattr(self.vision_backbone, name):
+                    for param in getattr(self.vision_backbone, name).parameters():
+                        param.requires_grad = True
+
         # Text encoder
         t_type = f'{data_path}roberta-base/'
         self.tokenizer = RobertaTokenizerFast.from_pretrained(t_type, local_files_only=True)
         # self.text_encoder = RobertaModel.from_pretrained(t_type, local_files_only=True)
         self.text_encoder = RobertaModel.from_pretrained(t_type, local_files_only=True, use_safetensors=False)
+        # Freeze all parameters then optionally unfreeze last ``text_unfreeze_layers`` blocks
         for param in self.text_encoder.parameters():
             param.requires_grad = False
+        if text_unfreeze_layers > 0:
+            for layer in self.text_encoder.encoder.layer[-text_unfreeze_layers:]:
+                for param in layer.parameters():
+                    param.requires_grad = True
 
         self.text_projector = nn.Sequential(
             nn.Linear(self.text_encoder.config.hidden_size, d_model),
