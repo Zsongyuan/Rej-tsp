@@ -641,7 +641,7 @@ class TSPHead(nn.Module):
         改进的loss计算函数
         """
         bbox_losses, cls_losses, pos_masks, com_losses, pos_masks_com = [], [], [], [], []
-        ans_losses, rejection_losses = [], []
+        ans_losses, bg_losses = [], []
 
         # Keep loss calculation
         keep_losses = 0
@@ -672,18 +672,17 @@ class TSPHead(nn.Module):
             ans_losses.append(F.binary_cross_entropy_with_logits(ans_preds[i], ans_target))
 
             if img_metas[i].get('is_negative', False):
-                # rejection loss on negative samples
+                # hard negative mining for G-head
                 preds = torch.cat([p[i] for p in cls_preds])
                 if preds.numel() > 0:
-                    probs = preds.softmax(dim=1)[..., :-1]
-                    confidence_scores, _ = probs.max(dim=1)
-                    highest_confidence = confidence_scores.max()
-                    rejection_losses.append(F.binary_cross_entropy(
-                        highest_confidence.unsqueeze(0),
-                        highest_confidence.new_zeros(1)
-                    ))
-                else:
-                    rejection_losses.append(ans_preds[i].new_tensor(0.0))
+                    obj_scores, obj_labels = preds.sigmoid().max(dim=1)
+                    k = min(max(1, int(0.01 * obj_scores.numel())), 50)
+                    hard_ids = obj_scores.topk(k).indices
+                    hard_logits = preds[hard_ids, obj_labels[hard_ids]]
+                    bg_losses.append(F.binary_cross_entropy_with_logits(
+                        hard_logits,
+                        hard_logits.new_zeros(hard_logits.shape),
+                        reduction='mean'))
                 continue
 
             bbox_loss, cls_loss, pos_mask, com_loss, pos_mask_com = self._loss_single(
@@ -734,10 +733,10 @@ class TSPHead(nn.Module):
             final_com_loss = torch.tensor(0.0, device=device, requires_grad=True)
 
         final_ans_loss = self.lambda_a * torch.mean(torch.stack(ans_losses))
-        if rejection_losses:
-            final_rejection_loss = self.lambda_bg * torch.mean(torch.stack(rejection_losses))
+        if bg_losses:
+            final_bg_loss = self.lambda_bg * torch.mean(torch.stack(bg_losses))
         else:
-            final_rejection_loss = final_ans_loss.new_tensor(0.0)
+            final_bg_loss = final_ans_loss.new_tensor(0.0)
 
         # 返回所有loss组件
         loss_dict = {
@@ -746,7 +745,7 @@ class TSPHead(nn.Module):
             'keep_loss': self.keep_loss_weight * keep_losses / len(img_metas),
             'com_loss': final_com_loss,
             'ans_loss': final_ans_loss,
-            'loss_rejection': final_rejection_loss,
+            'bg_loss': final_bg_loss,
         }
         
         # 添加统计信息（可选）

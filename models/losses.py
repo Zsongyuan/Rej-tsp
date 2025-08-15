@@ -600,23 +600,19 @@ class SetCriterion(nn.Module):
         if batch_size == 0:
             return {"loss_rejection": torch.tensor(0.0, device=pred_logits.device)}
 
-        # ``pred_logits`` 包含了所有类别（含背景）的原始logits。这里我们关心的是
-        # 模型对任何前景类别的置信度，因此先将logits转换为概率并排除背景类。
-        # 这样可以避免背景类别占据最大值，使得loss恒为0。
-        probs = pred_logits.softmax(dim=2)[..., :-1]  # (batch, num_queries, num_classes-1)
+        # 我们只关心“物体vs非物体”的置信度，这通常由最后一个logit表示
+        # 或者，我们可以取所有类别中的最大值作为这个预测框的置信度
+        confidence_scores, _ = torch.max(pred_logits, dim=2) # (batch, num_queries)
 
-        # 对每个query取前景类别的最大概率
-        confidence_scores, _ = torch.max(probs, dim=2)  # (batch, num_queries)
+        # 找到每个负样本中，置信度最高的那个预测框
+        highest_confidence_scores, _ = torch.max(confidence_scores, dim=1) # (batch,)
 
-        # 再在所有query中找到最高的前景概率
-        highest_confidence_scores, _ = torch.max(confidence_scores, dim=1)  # (batch,)
-
-        # 目标是让这个最高的前景概率接近0
+        # 目标是让这个最高的分数也趋近于0
         target_zeros = torch.zeros_like(highest_confidence_scores)
-
-        # 使用BCE损失来惩罚高置信度的负样本
-        rejection_loss = F.binary_cross_entropy(highest_confidence_scores, target_zeros)
-
+        
+        # 只对这个最高分计算BCE损失
+        rejection_loss = self.rejection_loss(highest_confidence_scores, target_zeros)
+        
         return {"loss_rejection": rejection_loss}
 
 
