@@ -189,7 +189,7 @@ class TSPHead(nn.Module):
         nn.init.normal_(self.cls_conv.kernel, std=.01)
         nn.init.constant_(self.cls_conv.bias, bias_init_with_prob(.01))
         nn.init.normal_(self.ans_fc.weight, std=.01)
-        nn.init.constant_(self.ans_fc.bias, bias_init_with_prob(.5))
+        nn.init.constant_(self.ans_fc.bias, bias_init_with_prob(.4))
 
         for i in range(len(self.keep_conv)):
             nn.init.normal_(self.keep_conv[i].kernel, std=.01)
@@ -261,45 +261,31 @@ class TSPHead(nn.Module):
                 bboxes_state.append(bbox_state)
         
         bbox_preds, cls_preds, points = [], [], []
-        keep_gts = []
-        keep_preds, prune_masks = [], []
-        prune_mask = None
+        keep_gts, keep_preds = [], []
         inputs = x[1:]
         x = inputs[-1]
-        for i in range(len(inputs) - 1, -1, -1): # 2,1,0
-            if i ==1 :  #  1,0
-                prune_mask = self._get_keep_voxel(x, i + 2, bboxes_state, img_metas)
-
-                keep_gt = []
-                for permutation in x.decomposition_permutations:
-                    keep_gt.append(prune_mask[permutation])
-                keep_gts.append(keep_gt)
+        for i in range(len(inputs) - 1, -1, -1):  # 2,1,0
+            if i == 1:
                 x = self.__getattr__(f'up_block_{i + 1}')(x)
                 coords = x.coordinates.float()
                 x_level_features = inputs[i].features_at_coordinates(coords)  # select for partial addition
                 x_level = ME.SparseTensor(features=x_level_features,
                                           coordinate_map_key=x.coordinate_map_key,
-                                        coordinate_manager=x.coordinate_manager)
+                                          coordinate_manager=x.coordinate_manager)
                 x = x + x_level
             elif i == 0:
-                prune_mask = self._get_keep_voxel(x, i + 2, bboxes_state, img_metas)
-                keep_gt = []
-                for permutation in x.decomposition_permutations:
-                    keep_gt.append(prune_mask[permutation])
-                keep_gts.append(keep_gt)
                 x = self.__getattr__(f'up_block_{i + 1}')(x)
                 prune_threshold_ = np.random.randint(self.random_prune_threshold[0], self.random_prune_threshold[1])
-                self.pts_prune_threshold = (prune_threshold_,self.pts_prune_threshold[1])
+                self.pts_prune_threshold = (prune_threshold_, self.pts_prune_threshold[1])
                 coords = x.coordinates.float()
                 x_level_features = inputs[i].features_at_coordinates(coords)  # select for partial addition
                 x_level = ME.SparseTensor(features=x_level_features,
                                           coordinate_map_key=x.coordinate_map_key,
-                                        coordinate_manager=x.coordinate_manager)
+                                          coordinate_manager=x.coordinate_manager)
                 x_ori = x + x_level
-                
-                
-                sampled_coords,sampled_features, original_indices = [],[],[]
-                
+
+                sampled_coords, sampled_features, original_indices = [], [], []
+
                 for permutation in inputs[0].decomposition_permutations:
                     original_indices.extend(permutation.cpu().numpy())
                     if len(permutation) > self.num_samples_com:
@@ -308,43 +294,43 @@ class TSPHead(nn.Module):
                         sampled_features.append(inputs[0].features[permutation][choice])
                         sampled_coords.append(inputs[0].coordinates[permutation][choice])
                     else:
-                        padding_size = self.num_samples_com - len(permutation)      
+                        padding_size = self.num_samples_com - len(permutation)
                         padded_features = torch.cat(
-                            [inputs[0].features[permutation], torch.zeros((padding_size, inputs[0].features[permutation].shape[1]), 
-                                                                  dtype=inputs[0].features.dtype).to(inputs[0].device)], dim=0) 
+                            [inputs[0].features[permutation], torch.zeros((padding_size, inputs[0].features[permutation].shape[1]),
+                                                                          dtype=inputs[0].features.dtype).to(inputs[0].device)], dim=0)
                         padded_coords = torch.cat(
                             [inputs[0].coordinates[permutation], -torch.ones((padding_size, inputs[0].coordinates[permutation].shape[1]),
-                                                                     dtype=inputs[0].coordinates.dtype).to(inputs[0].device)], 
-                                                                     dim=0)  
+                                                                             dtype=inputs[0].coordinates.dtype).to(inputs[0].device)],
+                            dim=0)
                         sampled_features.append(padded_features)
                         sampled_coords.append(padded_coords)
                 sampled_features = torch.stack(sampled_features)
                 sampled_coords = torch.stack(sampled_coords)
                 sampled_features, text_feats = self.com_trans(
                     vis_feats=sampled_features.contiguous(),
-                    pos_feats=self.pos_embed(sampled_coords[:,:,1:]*self.voxel_size).transpose(1, 2).contiguous(),
-                    padding_mask=sampled_coords[:, :,0] == -1,
+                    pos_feats=self.pos_embed(sampled_coords[:, :, 1:] * self.voxel_size).transpose(1, 2).contiguous(),
+                    padding_mask=sampled_coords[:, :, 0] == -1,
                     text_feats=text_feats,
                     text_padding_mask=text_attention_mask)
-                
+
                 com_pred = self.com_cls(sampled_features.transpose(1, 2).contiguous()).transpose(1, 2).contiguous()
-                valid_mask = sampled_coords[:, :,0] != -1
+                valid_mask = sampled_coords[:, :, 0] != -1
                 com_pred_training = [com_pred[k][valid_mask[k]] for k in range(len(com_pred))]
-                com_coords_training = [sampled_coords[k][valid_mask[k]][:,1:]*self.voxel_size for k in range(len(com_pred))]
+                com_coords_training = [sampled_coords[k][valid_mask[k]][:, 1:] * self.voxel_size for k in range(len(com_pred))]
                 sampled_features = sampled_features[valid_mask]
                 sampled_coords = sampled_coords[valid_mask]
                 com_pred = com_pred[valid_mask].squeeze(-1)
                 com_mask = com_pred.sigmoid() > self.com_threshold
                 sampled_features = sampled_features[com_mask]
-                sampled_coords = sampled_coords[com_mask]                
+                sampled_coords = sampled_coords[com_mask]
                 matches = (sampled_coords.unsqueeze(1) == x_ori.coordinates.unsqueeze(0)).all(dim=-1).any(dim=1)
                 sampled_features = sampled_features[~matches]
-                sampled_coords = sampled_coords[~matches]                   
-                
-                x_com_features = x.features_at_coordinates(sampled_coords.float())     
-                x_com_features = x_com_features + sampled_features           
-                x = ME.SparseTensor(features=torch.cat((x_ori.features,x_com_features),dim=0), 
-                                    coordinates=torch.cat((x_ori.coordinates,sampled_coords),dim=0), 
+                sampled_coords = sampled_coords[~matches]
+
+                x_com_features = x.features_at_coordinates(sampled_coords.float())
+                x_com_features = x_com_features + sampled_features
+                x = ME.SparseTensor(features=torch.cat((x_ori.features, x_com_features), dim=0),
+                                    coordinates=torch.cat((x_ori.coordinates, sampled_coords), dim=0),
                                     coordinate_manager=x_ori.coordinate_manager, tensor_stride=x_ori.tensor_stride, device=x_ori.device)
             if i > 0: # 2,1
                 sampled_coords,sampled_features, original_indices = [],[],[]
@@ -373,26 +359,31 @@ class TSPHead(nn.Module):
                 sampled_coords = torch.stack(sampled_coords)
                 sampled_features, text_feats = self.keep_trans[i-1](
                     vis_feats=sampled_features.contiguous(),
-                    pos_feats=self.pos_embed(sampled_coords[:,:,1:]*self.voxel_size).transpose(1, 2).contiguous(),
-                    padding_mask=sampled_coords[:, :,0] == -1,
+                    pos_feats=self.pos_embed(sampled_coords[:, :, 1:] * self.voxel_size).transpose(1, 2).contiguous(),
+                    padding_mask=sampled_coords[:, :, 0] == -1,
                     text_feats=text_feats,
                     text_padding_mask=text_attention_mask)
-                
-                valid_mask = sampled_coords[:, :,0] != -1
+
+                valid_mask = sampled_coords[:, :, 0] != -1
                 sampled_features = sampled_features[valid_mask]
                 sampled_coords = sampled_coords[valid_mask]
-                
-                x = ME.SparseTensor(features=sampled_features, coordinates=sampled_coords, 
+
+                x = ME.SparseTensor(features=sampled_features, coordinates=sampled_coords,
                                     coordinate_manager=x.coordinate_manager, tensor_stride=x.tensor_stride, device=x.device)
-                keep_scores = self.keep_conv[i-1](x) # 1 MLP
+
+                prune_mask = self._get_keep_voxel(x, i + 1, bboxes_state, img_metas)
+                keep_gt = []
+                for permutation in x.decomposition_permutations:
+                    keep_gt.append(prune_mask[permutation])
+                keep_gts.append(keep_gt)
+
+                keep_scores = self.keep_conv[i-1](x)  # 1 MLP
                 prune_training_keep = ME.SparseTensor(
-                                    -keep_scores.features,
-                                    coordinate_map_key=keep_scores.coordinate_map_key,
-                                    coordinate_manager=keep_scores.coordinate_manager)
-                
-     
+                    -keep_scores.features,
+                    coordinate_map_key=keep_scores.coordinate_map_key,
+                    coordinate_manager=keep_scores.coordinate_manager)
+
                 keep_pred = keep_scores.features
-                prune_inference = keep_pred
                 keeps = []
 
                 try:
@@ -420,7 +411,7 @@ class TSPHead(nn.Module):
         out = self.fuse(out, text_feats[:, 0])
         ans_pred = self._compute_answerability(out, text_feats)
         bbox_pred, cls_pred, point = self._forward_single(out)
-        return [bbox_pred], [cls_pred], [point], keep_preds[::-1], keep_gts[::-1], bboxes_level, com_pred_training, com_coords_training, ans_pred
+        return [bbox_pred], [cls_pred], [point], keep_preds, keep_gts, bboxes_level, com_pred_training, com_coords_training, ans_pred
     
 
     def _prune_inference(self, x, scores, layer_id):
@@ -658,15 +649,18 @@ class TSPHead(nn.Module):
             k_loss = 0
             keep_pred = [x[i] for x in keep_preds]
             keep_gt = [x[i] for x in keep_gts]
-            for j in range(len(keep_preds)):
+            for j in range(len(keep_pred)):
                 pred = keep_pred[j]
-                gt = (keep_gt[j]).long()
+                gt = keep_gt[j].float().unsqueeze(1)
+
+                if pred.size(0) != gt.size(0):
+                    raise RuntimeError("keep pred and gt size mismatch")
 
                 if gt.sum() != 0:
                     keep_loss = self.keep_loss(pred, gt, avg_factor=gt.sum())
                     k_loss = torch.mean(keep_loss) / 3 + k_loss
                 else:
-                    keep_loss = self.keep_loss(pred, gt, avg_factor=len(gt))  
+                    keep_loss = self.keep_loss(pred, gt, avg_factor=gt.shape[0])
                     k_loss = torch.mean(keep_loss) / 3 + k_loss
 
             keep_losses = keep_losses + k_loss
@@ -714,17 +708,29 @@ class TSPHead(nn.Module):
         else:
             final_bbox_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
 
-        total_pos = torch.sum(torch.cat(pos_masks))
-        if total_pos > 0:
-            final_cls_loss = torch.sum(torch.cat(cls_losses)) / total_pos
+        device = cls_preds[0][0].device
+
+        if pos_masks:
+            total_pos = torch.stack([m.float().sum() for m in pos_masks]).sum()
         else:
-            final_cls_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
-        
-        total_pos_com = torch.sum(torch.cat(pos_masks_com))
-        if total_pos_com > 0:
-            final_com_loss = torch.sum(torch.cat(com_losses)) / total_pos_com
+            total_pos = torch.tensor(0.0, device=device)
+
+        if cls_losses and total_pos > 0:
+            total_cls = torch.stack([l.sum() for l in cls_losses]).sum()
+            final_cls_loss = total_cls / total_pos
         else:
-            final_com_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
+            final_cls_loss = torch.tensor(0.0, device=device, requires_grad=True)
+
+        if pos_masks_com:
+            total_pos_com = torch.stack([m.float().sum() for m in pos_masks_com]).sum()
+        else:
+            total_pos_com = torch.tensor(0.0, device=device)
+
+        if com_losses and total_pos_com > 0:
+            total_com = torch.stack([l.sum() for l in com_losses]).sum()
+            final_com_loss = total_com / total_pos_com
+        else:
+            final_com_loss = torch.tensor(0.0, device=device, requires_grad=True)
 
         final_ans_loss = self.lambda_a * torch.mean(torch.stack(ans_losses))
         if bg_losses:
