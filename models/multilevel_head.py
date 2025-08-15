@@ -70,9 +70,11 @@ class TSPHead(nn.Module):
                  prune_threshold=(0.3,0.7),
                  com_threshold = 0.15,
                  train_cfg=None,
-                 test_cfg=dict(nms_pre=1, iou_thr=.5, score_thr=.01),
+                 test_cfg=dict(nms_pre=1, iou_thr=.5, score_thr=.01, ans_thr=0.5),
                  keep_loss_weight = 1.0,
-                 bbox_loss_weight = 1.0):
+                 bbox_loss_weight = 1.0,
+                 lambda_a=0.25,
+                 lambda_bg=0.1):
         super(TSPHead, self).__init__()
         self.voxel_size = voxel_size
         self.pts_prune_threshold = pts_prune_threshold
@@ -82,6 +84,8 @@ class TSPHead(nn.Module):
         self.prune_threshold = prune_threshold
         self.keep_loss_weight = keep_loss_weight
         self.bbox_loss_weight = bbox_loss_weight
+        self.lambda_a = lambda_a
+        self.lambda_bg = lambda_bg
         self.assigner = TR3DAssigner(top_pts_threshold=32, label2level=[0])
         self.bbox_loss = AxisAlignedIoULoss2(mode='diou', reduction='none')
         self.cls_loss = FocalLoss(reduction='none')
@@ -94,6 +98,7 @@ class TSPHead(nn.Module):
         self.com_threshold = com_threshold
         self.random_prune_threshold = (1200,4000)
         self._init_layers(in_channels, out_channels, n_reg_outs, n_classes)
+        self.ans_fc = nn.Linear(out_channels, 1)
 
 
     @staticmethod
@@ -183,13 +188,15 @@ class TSPHead(nn.Module):
         nn.init.normal_(self.bbox_conv.kernel, std=.01)
         nn.init.normal_(self.cls_conv.kernel, std=.01)
         nn.init.constant_(self.cls_conv.bias, bias_init_with_prob(.01))
+        nn.init.normal_(self.ans_fc.weight, std=.01)
+        nn.init.constant_(self.ans_fc.bias, bias_init_with_prob(.5))
 
         for i in range(len(self.keep_conv)):
             nn.init.normal_(self.keep_conv[i].kernel, std=.01)
 
         for n, m in self.named_modules():
             if ('bbox_conv' not in n) and ('cls_conv' not in n) \
-                and ('keep_conv' not in n) and ('loss' not in n):
+                and ('keep_conv' not in n) and ('loss' not in n) and ('ans_fc' not in n):
                 if isinstance(m, ME.MinkowskiConvolution):
                     ME.utils.kaiming_normal_(
                         m.kernel, mode='fan_out', nonlinearity='relu')
@@ -214,6 +221,21 @@ class TSPHead(nn.Module):
             points.append(x.coordinates[permutation][:, 1:]* self.voxel_size)
         return bbox_preds, cls_preds, points
 
+    def _compute_answerability(self, out, text_feats):
+        """Compute answerability logits from proposal features."""
+        ans_scores = []
+        for b, perm in enumerate(out.decomposition_permutations):
+            feats = out.features[perm]
+            if feats.numel() == 0:
+                pooled = feats.new_zeros(feats.shape[1])
+            else:
+                feats = F.normalize(feats, p=2, dim=1)
+                txt = F.normalize(text_feats[b, 0], p=2, dim=0)
+                weights = torch.matmul(feats, txt)
+                weights = torch.softmax(weights, dim=0)
+                pooled = (feats * weights.unsqueeze(1)).sum(0)
+            ans_scores.append(self.ans_fc(pooled))
+        return torch.stack(ans_scores).squeeze(-1)
 
     def forward(self, x,text_feats, text_attention_mask, gt_bboxes, gt_labels, gt_all_bbox_new, auxi_bbox, img_metas,pc=None):
         bboxes_level = []
@@ -386,8 +408,9 @@ class TSPHead(nn.Module):
             if i == 0:
                 out = self.__getattr__(f'out_block_{i}')(x)
         out = self.fuse(out, text_feats[:, 0])
+        ans_pred = self._compute_answerability(out, text_feats)
         bbox_pred, cls_pred, point = self._forward_single(out)
-        return [bbox_pred], [cls_pred], [point], keep_preds[::-1], keep_gts[::-1], bboxes_level, com_pred_training, com_coords_training
+        return [bbox_pred], [cls_pred], [point], keep_preds[::-1], keep_gts[::-1], bboxes_level, com_pred_training, com_coords_training, ans_pred
     
 
     def _prune_inference(self, x, scores, layer_id):
@@ -579,23 +602,19 @@ class TSPHead(nn.Module):
         n_classes = cls_preds.shape[1]
         pos_mask = assigned_ids >= 0
 
-        if len(gt_labels) > 0:
-            cls_targets = torch.where(pos_mask, gt_labels[assigned_ids], n_classes)
-        else:
-            cls_targets = gt_labels.new_full((len(pos_mask),), n_classes)
+        cls_targets = cls_preds.new_zeros((len(cls_preds), n_classes))
+        if pos_mask.any():
+            cls_targets[pos_mask, gt_labels[assigned_ids[pos_mask]]] = 1
 
         cls_loss = self.cls_loss(cls_preds, cls_targets)
         
         assigned_ids_com = self.assigner.assign([com_coords], gt_bboxes, gt_labels, img_meta)
-        # cls loss
+        # com loss
         pos_mask_com = assigned_ids_com >= 0
-
-        if len(gt_labels) > 0:
-            cls_targets = torch.where(pos_mask_com, gt_labels[assigned_ids_com], n_classes)
-        else:
-            cls_targets = gt_labels.new_full((len(pos_mask_com),), n_classes)
-
-        com_loss = self.com_loss(com_pred, cls_targets)
+        com_targets = com_pred.new_zeros((len(com_pred), n_classes))
+        if pos_mask_com.any():
+            com_targets[pos_mask_com, gt_labels[assigned_ids_com[pos_mask_com]]] = 1
+        com_loss = self.com_loss(com_pred, com_targets)
 
         # bbox loss
         pos_bbox_preds = bbox_preds[pos_mask]
@@ -615,12 +634,13 @@ class TSPHead(nn.Module):
         return bbox_loss, cls_loss, pos_mask, com_loss, pos_mask_com
 
 
-    def _loss(self, bbox_preds, cls_preds, points, gt_bboxes, gt_labels, img_metas, 
-            keep_preds, keep_gts, bboxes_level, com_pred_training, com_coords_training):
+    def _loss(self, bbox_preds, cls_preds, points, gt_bboxes, gt_labels, img_metas,
+            keep_preds, keep_gts, bboxes_level, com_pred_training, com_coords_training, ans_preds):
         """
         改进的loss计算函数
         """
         bbox_losses, cls_losses, pos_masks, com_losses, pos_masks_com = [], [], [], [], []
+        ans_losses, bg_losses = [], []
 
         # Keep loss calculation
         keep_losses = 0
@@ -643,6 +663,24 @@ class TSPHead(nn.Module):
 
         # Per-image loss calculation
         for i in range(len(img_metas)):
+            # answerability loss
+            ans_target = ans_preds.new_tensor(0.0 if img_metas[i].get('is_negative', False) else 1.0)
+            ans_losses.append(F.binary_cross_entropy_with_logits(ans_preds[i], ans_target))
+
+            if img_metas[i].get('is_negative', False):
+                # hard negative mining for G-head
+                preds = torch.cat([p[i] for p in cls_preds])
+                if preds.numel() > 0:
+                    obj_scores, obj_labels = preds.sigmoid().max(dim=1)
+                    k = min(max(1, int(0.01 * obj_scores.numel())), 50)
+                    hard_ids = obj_scores.topk(k).indices
+                    hard_logits = preds[hard_ids, obj_labels[hard_ids]]
+                    bg_losses.append(F.binary_cross_entropy_with_logits(
+                        hard_logits,
+                        hard_logits.new_zeros(hard_logits.shape),
+                        reduction='mean'))
+                continue
+
             bbox_loss, cls_loss, pos_mask, com_loss, pos_mask_com = self._loss_single(
                 bbox_preds=[x[i] for x in bbox_preds],
                 cls_preds=[x[i] for x in cls_preds],
@@ -652,7 +690,7 @@ class TSPHead(nn.Module):
                 gt_labels=gt_labels[i],
                 com_pred=com_pred_training[i],
                 com_coords=com_coords_training[i])
-            
+
             if bbox_loss is not None:
                 bbox_losses.append(bbox_loss)
             cls_losses.append(cls_loss)
@@ -678,12 +716,20 @@ class TSPHead(nn.Module):
         else:
             final_com_loss = torch.tensor(0.0, device=cls_preds[0][0].device, requires_grad=True)
 
+        final_ans_loss = self.lambda_a * torch.mean(torch.stack(ans_losses))
+        if bg_losses:
+            final_bg_loss = self.lambda_bg * torch.mean(torch.stack(bg_losses))
+        else:
+            final_bg_loss = final_ans_loss.new_tensor(0.0)
+
         # 返回所有loss组件
         loss_dict = {
             'bbox_loss': final_bbox_loss,
             'cls_loss': final_cls_loss,
             'keep_loss': self.keep_loss_weight * keep_losses / len(img_metas),
             'com_loss': final_com_loss,
+            'ans_loss': final_ans_loss,
+            'bg_loss': final_bg_loss,
         }
         
         # 添加统计信息（可选）
@@ -697,58 +743,19 @@ class TSPHead(nn.Module):
         """Forward training with rejection loss support"""
         # 执行forward获取预测
         bbox_preds, cls_preds, points, keep_preds, keep_gts, bboxes_level, \
-        com_pred_training, com_coords_training = self(
-            x, text_feats, text_attention_mask, gt_bboxes, gt_labels, 
+        com_pred_training, com_coords_training, ans_preds = self(
+            x, text_feats, text_attention_mask, gt_bboxes, gt_labels,
             gt_all_bbox_new, auxi_bbox, img_metas, pc
         )
-        
-        # 计算所有loss
+
         losses = self._loss(
             bbox_preds, cls_preds, points,
-            gt_bboxes, gt_labels, img_metas, 
+            gt_bboxes, gt_labels, img_metas,
             keep_preds, keep_gts, bboxes_level,
-            com_pred_training, com_coords_training
+            com_pred_training, com_coords_training, ans_preds
         )
-        
-        # 检查是否有负样本需要计算rejection loss
-        has_negative = any(meta.get('is_negative', False) for meta in img_metas)
-        if has_negative:
-            # 计算rejection loss
-            rejection_loss = self._compute_rejection_loss(
-                cls_preds, img_metas
-            )
-            losses['rejection_loss'] = rejection_loss
-        else:
-            losses['rejection_loss'] = torch.tensor(0.0, device=x[0].device)
-        
+
         return losses
-    
-    def _compute_rejection_loss(self, cls_preds, img_metas):
-        """计算拒绝损失"""
-        rejection_losses = []
-        
-        for i, meta in enumerate(img_metas):
-            if meta.get('is_negative', False):
-                # 对于负样本，所有预测的置信度都应该很低
-                preds = torch.cat([p[i] for p in cls_preds])
-                
-                # 使用sigmoid获取置信度
-                confidences = torch.sigmoid(preds)
-                
-                # 找到最高置信度
-                max_conf = torch.max(confidences)
-                
-                # 目标是让最高置信度也接近0
-                loss = F.binary_cross_entropy(
-                    max_conf, 
-                    torch.tensor(0.0, device=max_conf.device)
-                )
-                rejection_losses.append(loss)
-        
-        if rejection_losses:
-            return torch.mean(torch.stack(rejection_losses))
-        else:
-            return torch.tensor(0.0, device=cls_preds[0][0].device)
 
 
     def _nms(self, bboxes, scores, img_meta):
@@ -848,13 +855,14 @@ class TSPHead(nn.Module):
         inputs = x[1:]
         x = inputs[-1]
         bbox_preds, cls_preds, points = [], [], []
-        keep_scores = None
+        prune_inference = None
         
         for i in range(len(inputs) - 1, -1, -1):
             if i ==1:
-                x = self._prune_inference(x, prune_inference, i)
-                if x is None:
-                    raise RuntimeError("no points left after pruning at layer 1")
+                if prune_inference is not None:
+                    x = self._prune_inference(x, prune_inference, i)
+                    if x is None:
+                        raise RuntimeError("no points left after pruning at layer 1")
                 x = self.__getattr__(f'up_block_{i + 1}')(x)
                 coords = x.coordinates.float()
                 x_level_features = inputs[i].features_at_coordinates(coords)
@@ -865,9 +873,10 @@ class TSPHead(nn.Module):
                 )
                 x = x + x_level
             elif i ==0:
-                x = self._prune_inference(x, prune_inference, i)
-                if x is None:
-                    raise RuntimeError("no points left after pruning at layer 0")
+                if prune_inference is not None:
+                    x = self._prune_inference(x, prune_inference, i)
+                    if x is None:
+                        raise RuntimeError("no points left after pruning at layer 0")
                 x = self.__getattr__(f'up_block_{i + 1}')(x)
                 coords = x.coordinates.float()
                 x_level_features = inputs[i].features_at_coordinates(coords)
@@ -968,18 +977,28 @@ class TSPHead(nn.Module):
                 x = ME.SparseTensor(features=sampled_features, coordinates=sampled_coords, 
                                     coordinate_manager=x.coordinate_manager, tensor_stride=x.tensor_stride, device=x.device)
                 keep_scores = self.keep_conv[i-1](x)
-                keep_pred = keep_scores.features
-                prune_inference = keep_pred
+                prune_inference = keep_scores.features
 
             x = self.__getattr__(f'lateral_block_{i}')(x)
             if i == 0:
                 out = self.__getattr__(f'out_block_{i}')(x)
         start_time = time.time()
         out = self.fuse(out, text_feats[:, 0])
+        ans_pred = self._compute_answerability(out, text_feats)
         bbox_pred, cls_pred, point = self._forward_single(out)
         results = self._get_bboxes([bbox_pred], [cls_pred], [point], img_metas)
+        p_ans = torch.sigmoid(ans_pred)
+        gated_results = []
+        for b, (bbox, score, label) in enumerate(results):
+            if p_ans[b] < self.test_cfg.get('ans_thr', 0.5):
+                empty_bbox = bbox.new_zeros((0, bbox.shape[1]))
+                empty_score = score.new_zeros((0,))
+                empty_label = label.new_zeros((0,), dtype=torch.long)
+                gated_results.append((empty_bbox, empty_score, empty_label))
+            else:
+                gated_results.append((bbox, score, label))
         head_time = time.time() - start_time
-        return results, head_time
+        return gated_results, head_time
 
 class TR3DAssigner:
     def __init__(self, top_pts_threshold, label2level):
