@@ -746,6 +746,9 @@ class TSPHead(nn.Module):
             'com_loss': final_com_loss,
             'ans_loss': final_ans_loss,
             'bg_loss': final_bg_loss,
+            # alias for compatibility with training hooks expecting
+            # `loss_rejection` to record negative-sample training.
+            'loss_rejection': final_bg_loss,
         }
         
         # 添加统计信息（可选）
@@ -1008,7 +1011,8 @@ class TSPHead(nn.Module):
         gated_results = []
         for b, (bbox, score, label) in enumerate(results):
             if p_ans[b] < self.test_cfg.get('ans_thr', 0.5):
-                empty_bbox = bbox.new_zeros((0, bbox.shape[1]))
+                empty_tensor = bbox.tensor.new_zeros((0, bbox.tensor.shape[1]))
+                empty_bbox = bbox.new_box(empty_tensor)
                 empty_score = score.new_zeros((0,))
                 empty_label = label.new_zeros((0,), dtype=torch.long)
                 gated_results.append((empty_bbox, empty_score, empty_label))

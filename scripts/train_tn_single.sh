@@ -5,11 +5,11 @@ TORCH_DISTRIBUTED_DEBUG=INFO CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.
     --use_color \
     --weight_decay 0.0005 \
     --data_root ~/multimodal/Rej-tsp/ \
-    --val_freq 3 --batch_size 2 --save_freq 6 --print_freq 500 \
+    --val_freq 1 --batch_size 2 --save_freq 6 --print_freq 500 \
     --lr=5e-4 --keep_trans_lr=5e-4 --voxel_size=0.01 --num_workers=16 \
     --dataset scanrefer --test_dataset scanrefer \
     --detect_intermediate --joint_det \
-    --lr_decay_epochs 50 75 \
+    --lr_decay_epochs 116 131 \
     --augment_det \
     --use_rejection \
     --text_unfreeze_layers 0 \
