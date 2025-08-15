@@ -70,7 +70,7 @@ class TSPHead(nn.Module):
                  prune_threshold=(0.3,0.7),
                  com_threshold = 0.15,
                  train_cfg=None,
-                 test_cfg=dict(nms_pre=1, iou_thr=.5, score_thr=.01, ans_thr=0.5),
+                 test_cfg=dict(nms_pre=1, iou_thr=.5, score_thr=.01, ans_thr=0.5, ans_temp=1.0),
                  keep_loss_weight = 1.0,
                  bbox_loss_weight = 1.0,
                  lambda_a=0.25,
@@ -88,8 +88,8 @@ class TSPHead(nn.Module):
         self.lambda_bg = lambda_bg
         self.assigner = TR3DAssigner(top_pts_threshold=32, label2level=[0])
         self.bbox_loss = AxisAlignedIoULoss2(mode='diou', reduction='none')
-        self.cls_loss = FocalLoss(reduction='none')
-        self.com_loss = FocalLoss(reduction='none')
+        self.cls_loss = FocalLoss(reduction='none', use_sigmoid=True)
+        self.com_loss = FocalLoss(reduction='none', use_sigmoid=True)
         self.keep_loss = FocalLoss(reduction='mean', use_sigmoid=True)
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
@@ -267,8 +267,8 @@ class TSPHead(nn.Module):
         inputs = x[1:]
         x = inputs[-1]
         for i in range(len(inputs) - 1, -1, -1): # 2,1,0
-            if i ==1 :  #  1,0         
-                prune_mask = self._get_keep_voxel(x, i + 2, bboxes_state, img_metas) 
+            if i ==1 :  #  1,0
+                prune_mask = self._get_keep_voxel(x, i + 2, bboxes_state, img_metas)
 
                 keep_gt = []
                 for permutation in x.decomposition_permutations:
@@ -281,9 +281,8 @@ class TSPHead(nn.Module):
                                           coordinate_map_key=x.coordinate_map_key,
                                         coordinate_manager=x.coordinate_manager)
                 x = x + x_level
-                x = self._prune_training(x, prune_training_keep, i) 
             elif i == 0:
-                prune_mask = self._get_keep_voxel(x, i + 2, bboxes_state, img_metas) 
+                prune_mask = self._get_keep_voxel(x, i + 2, bboxes_state, img_metas)
                 keep_gt = []
                 for permutation in x.decomposition_permutations:
                     keep_gt.append(prune_mask[permutation])
@@ -291,7 +290,6 @@ class TSPHead(nn.Module):
                 x = self.__getattr__(f'up_block_{i + 1}')(x)
                 prune_threshold_ = np.random.randint(self.random_prune_threshold[0], self.random_prune_threshold[1])
                 self.pts_prune_threshold = (prune_threshold_,self.pts_prune_threshold[1])
-                x = self._prune_training(x, prune_training_keep, i)
                 coords = x.coordinates.float()
                 x_level_features = inputs[i].features_at_coordinates(coords)  # select for partial addition
                 x_level = ME.SparseTensor(features=x_level_features,
@@ -403,7 +401,10 @@ class TSPHead(nn.Module):
                 except Exception as e:
                     raise RuntimeError("failed to collect keep predictions") from e
                 keep_preds.append(keeps)
-                
+
+                # Prune current features using freshly computed scores
+                x = self._prune_training(x, prune_training_keep, i)
+
             x = self.__getattr__(f'lateral_block_{i}')(x)
             if i == 0:
                 out = self.__getattr__(f'out_block_{i}')(x)
@@ -987,7 +988,8 @@ class TSPHead(nn.Module):
         ans_pred = self._compute_answerability(out, text_feats)
         bbox_pred, cls_pred, point = self._forward_single(out)
         results = self._get_bboxes([bbox_pred], [cls_pred], [point], img_metas)
-        p_ans = torch.sigmoid(ans_pred)
+        temp = self.test_cfg.get('ans_temp', 1.0)
+        p_ans = torch.sigmoid(ans_pred / temp)
         gated_results = []
         for b, (bbox, score, label) in enumerate(results):
             if p_ans[b] < self.test_cfg.get('ans_thr', 0.5):
