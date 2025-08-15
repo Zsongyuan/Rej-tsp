@@ -403,7 +403,16 @@ class TSPHead(nn.Module):
                 keep_preds.append(keeps)
 
                 # Prune current features using freshly computed scores
-                x = self._prune_training(x, prune_training_keep, i)
+                # ``pts_prune_threshold`` is defined for two pruning stages,
+                # corresponding to ``i=2`` and ``i=1`` in the loop above.
+                # The previous implementation used the loop index ``i``
+                # directly, which caused an ``IndexError`` when ``i`` was 2
+                # because ``pts_prune_threshold`` only has two elements
+                # (indices 0 and 1). We offset the index by 1 so that the
+                # thresholds map correctly to the pruning stages:
+                #   i=2 -> threshold[1]
+                #   i=1 -> threshold[0]
+                x = self._prune_training(x, prune_training_keep, i - 1)
 
             x = self.__getattr__(f'lateral_block_{i}')(x)
             if i == 0:

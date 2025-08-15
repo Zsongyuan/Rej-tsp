@@ -19,6 +19,6 @@ TORCH_DISTRIBUTED_DEBUG=INFO CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.
     --val_file_path ~/multimodal/Rej-tsp/tns/val_mixed_9508_0.5.json \
     --log_dir ~/multimodal/Rej-tsp/ScanRefer/output/logs_rejection \
     --checkpoint_path ~/multimodal/Rej-tsp/checkpoints/ckpt_scanrefer.pth \
-    --start_epoch 79 \
-    --rejection_start_epoch 80
+    --start_epoch 67 \
+    --rejection_start_epoch 67
 
